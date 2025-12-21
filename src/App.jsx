@@ -92,7 +92,7 @@ function App() {
         <div className="flex justify-between items-center max-w-md mx-auto">
           <div className="flex items-center gap-2">
             <div className="bg-blue-600 p-2 rounded-lg"><Briefcase size={20} className="text-white" /></div>
-            <h1 className="font-bold text-lg tracking-tight">Smart Hands<span className="text-blue-500">Ops</span></h1>
+            <h1 className="font-bold text-lg tracking-tight">SMART HANDS V2<span className="text-blue-500">Ops</span></h1>
           </div>
           <div className="flex bg-slate-700 rounded-full p-1 gap-1">
             <button onClick={() => setViewMode('manager')} className={`p-2 rounded-full ${viewMode === 'manager' ? 'bg-blue-600' : 'text-slate-400'}`}><Briefcase size={16} /></button>
