@@ -8,7 +8,6 @@ import {
 
 function App() {
   const [viewMode, setViewMode] = useState('manager'); 
-  const [activeTab, setActiveTab] = useState('jobs'); 
   const [jobs, setJobs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [uploadingId, setUploadingId] = useState(null); // Track which job is uploading
@@ -67,7 +66,7 @@ function App() {
       
     } catch (error) {
       console.error("Upload failed", error);
-      alert("Upload failed!");
+      alert("Upload failed! (Check Console)");
     }
     setUploadingId(null); // Hide spinner
   };
@@ -92,12 +91,11 @@ function App() {
         <div className="flex justify-between items-center max-w-md mx-auto">
           <div className="flex items-center gap-2">
             <div className="bg-blue-600 p-2 rounded-lg"><Briefcase size={20} className="text-white" /></div>
-            <h1 className="font-bold text-lg tracking-tight">SMART HANDS V2<span className="text-blue-500">Ops</span></h1>
+            <h1 className="font-bold text-lg tracking-tight">Smart Hands <span className="text-blue-500">V2</span></h1>
           </div>
           <div className="flex bg-slate-700 rounded-full p-1 gap-1">
             <button onClick={() => setViewMode('manager')} className={`p-2 rounded-full ${viewMode === 'manager' ? 'bg-blue-600' : 'text-slate-400'}`}><Briefcase size={16} /></button>
             <button onClick={() => setViewMode('tech')} className={`p-2 rounded-full ${viewMode === 'tech' ? 'bg-emerald-600' : 'text-slate-400'}`}><Wrench size={16} /></button>
-            <button onClick={() => setViewMode('client')} className={`p-2 rounded-full ${viewMode === 'client' ? 'bg-purple-600' : 'text-slate-400'}`}><Eye size={16} /></button>
           </div>
         </div>
       </nav>
@@ -139,6 +137,7 @@ function App() {
                 {job.photoUrl ? (
                   <div className="mb-3 rounded-lg overflow-hidden border border-slate-600">
                     <img src={job.photoUrl} alt="Evidence" className="w-full h-40 object-cover" />
+                    <div className="text-center text-xs text-slate-400 py-1">Evidence Photo Uploaded</div>
                   </div>
                 ) : (
                   <div className="mb-3">
