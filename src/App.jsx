@@ -93,7 +93,7 @@ function App() {
         <div className="flex items-center gap-2">
         <div className="bg-blue-600 p-2 rounded-lg"><Briefcase size={24} className="text-white" /></div>
         <h1 className="font-bold text-lg tracking-tight">
-          Smart Hands <span className="text-xs bg-red-500 text-white px-1 rounded">v2.0</span>
+          Smart Hands <span className="text-xs bg-red-500 text-white px-1 rounded">v3.0</span>
         </h1>
       </div>
           <div className="flex bg-slate-700 rounded-full p-1 gap-1">
