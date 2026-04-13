@@ -61,7 +61,9 @@ const generateInvoicePdf = async (job) => {
     doc.text(`Assigned Tech: ${job.assignedTechName || 'N/A'}`, 40, 205);
     doc.text(`Service: ${job.task}`, 40, 225);
     doc.text(`Service fee: $${Number(job.serviceFee || 0).toFixed(2)}`, 40, 245);
-    let y = 270;
+    doc.setFontSize(11);
+    doc.text(`Service fee description: ${job.serviceFeeDescription || 'N/A'}`, 40, 262);
+    let y = 282;
     doc.setFontSize(12);
     doc.text('Service details:', 40, y);
     y += 18;
@@ -88,8 +90,9 @@ const generateInvoicePdf = async (job) => {
 
     doc.setFontSize(12);
     doc.text(`Total: $${calcInvoiceTotal(consumables, job.serviceFee).toFixed(2)}`, 40, yConsumables + 10);
+    const footerY = doc.internal.pageSize.height - 40;
     doc.setFontSize(10);
-    doc.text('Thank you for choosing Silicon Valley Smart Hands LLC.', 40, y + 35);
+    doc.text('Thank you for choosing Silicon Valley Smart Hands LLC.', 40, footerY);
     doc.save(`SV-Smart-Dispatch-Invoice-${job.id}.pdf`);
   } catch (error) {
     console.error('Invoice generation failed', error);
@@ -316,6 +319,7 @@ function App() {
         assignedTechDistanceKm: nearest?.distanceKm || null,
         consumables: [],
         serviceFee: 0,
+        serviceFeeDescription: '',
         beforePhotoUrl: '',
         afterPhotoUrl: '',
         clientSignedOff: false,
@@ -372,12 +376,13 @@ function App() {
   };
 
   const addServiceFee = async (job) => {
-    const serviceInput = serviceFeeInputs[job.id] || { amount: '' };
+    const serviceInput = serviceFeeInputs[job.id] || { amount: '', description: '' };
     if (!serviceInput.amount) return;
     await updateDoc(doc(db, 'jobs', job.id), {
       serviceFee: Number(serviceInput.amount),
+      serviceFeeDescription: serviceInput.description || '',
     });
-    setServiceFeeInputs((prev) => ({ ...prev, [job.id]: { amount: '' } }));
+    setServiceFeeInputs((prev) => ({ ...prev, [job.id]: { amount: '', description: '' } }));
   };
 
   const requestClientSignoff = async (job) => {
@@ -866,10 +871,26 @@ function App() {
                           <div className="mt-4 rounded-2xl bg-slate-900 p-3 border border-slate-700 text-slate-200">
                             <div className="text-slate-400 text-sm">Service fee</div>
                             <div className="font-semibold text-slate-100">${Number(job.serviceFee || 0).toFixed(2)}</div>
+                            {job.serviceFeeDescription && (
+                              <div className="text-slate-400 text-sm mt-2">{job.serviceFeeDescription}</div>
+                            )}
                           </div>
                         )}
                         {['tech', 'admin'].includes(profile.role) && (
                           <div className="mt-4 space-y-3">
+                            <input
+                              type="text"
+                              value={serviceFeeInputs[job.id]?.description || ''}
+                              onChange={(e) => setServiceFeeInputs((prev) => ({
+                                ...prev,
+                                [job.id]: {
+                                  ...prev[job.id],
+                                  description: e.target.value,
+                                },
+                              }))}
+                              placeholder="Service fee description"
+                              className="w-full rounded-2xl border border-slate-700 bg-slate-900 px-4 py-3 text-slate-100"
+                            />
                             <input
                               type="number"
                               min="0"
@@ -877,7 +898,10 @@ function App() {
                               value={serviceFeeInputs[job.id]?.amount || ''}
                               onChange={(e) => setServiceFeeInputs((prev) => ({
                                 ...prev,
-                                [job.id]: { amount: e.target.value },
+                                [job.id]: {
+                                  ...prev[job.id],
+                                  amount: e.target.value,
+                                },
                               }))}
                               placeholder="Service fee amount"
                               className="w-full rounded-2xl border border-slate-700 bg-slate-900 px-4 py-3 text-slate-100"
