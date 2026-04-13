@@ -323,13 +323,15 @@ function App() {
     }
   };
 
-  const currentJobs = profile?.role === 'admin'
-    ? jobs
-    : profile?.role === 'tech'
-      ? jobs.filter((job) => job.assignedTechEmail === profile.email || job.assignedTechName === profile.displayName)
-      : jobs.filter((job) => job.clientEmail === profile.email || job.client === profile.displayName);
+  const currentJobs = profile
+    ? profile.role === 'admin'
+      ? jobs
+      : profile.role === 'tech'
+        ? jobs.filter((job) => job.assignedTechEmail === profile.email || job.assignedTechName === profile.displayName)
+        : jobs.filter((job) => job.clientEmail === profile.email || job.client === profile.displayName)
+    : [];
 
-  const openRequestForm = profile?.role === 'client' ? true : false;
+  const openRequestForm = profile?.role === 'client';
   const canViewInvoice = profile?.role === 'admin' || profile?.role === 'client';
   const activeJobsCount = currentJobs.filter((job) => job.status !== 'Completed').length;
 
