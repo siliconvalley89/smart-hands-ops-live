@@ -1,6 +1,6 @@
 ﻿import React, { useState, useEffect } from 'react';
 import { db, storage, auth } from './firebase';
-import { collection, onSnapshot, addDoc, query, orderBy, deleteDoc, doc, updateDoc, getDocs, setDoc, where } from 'firebase/firestore';
+import { collection, onSnapshot, addDoc, query, orderBy, deleteDoc, doc, updateDoc, getDocs, getDoc, setDoc, where } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import {
   createUserWithEmailAndPassword,
@@ -159,10 +159,10 @@ function App() {
       try {
         setFirebaseUser(user);
         if (user) {
-          const usersQuery = query(collection(db, 'users'), where('uid', '==', user.uid));
-          const userSnapshot = await getDocs(usersQuery);
-          if (!userSnapshot.empty) {
-            setProfile({ id: userSnapshot.docs[0].id, ...userSnapshot.docs[0].data() });
+          const userRef = doc(db, 'users', user.uid);
+          const userSnapshot = await getDoc(userRef);
+          if (userSnapshot.exists()) {
+            setProfile({ id: userSnapshot.id, ...userSnapshot.data() });
           } else {
             setProfile(null);
           }
@@ -213,13 +213,18 @@ function App() {
   }, []);
 
   useEffect(() => {
+    if (profile?.role !== 'admin') {
+      setUsers([]);
+      return () => {};
+    }
+
     const q = query(collection(db, 'users'), orderBy('displayName', 'asc'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const userItems = snapshot.docs.map((docItem) => ({ id: docItem.id, ...docItem.data() }));
       setUsers(userItems);
     });
     return () => unsubscribe();
-  }, []);
+  }, [profile?.role]);
 
   const login = async () => {
     setLoginError('');
