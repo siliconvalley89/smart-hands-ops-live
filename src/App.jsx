@@ -9,6 +9,7 @@ import {
 function App() {
   const [viewMode, setViewMode] = useState('manager'); 
   const [jobs, setJobs] = useState([]);
+  const [techs, setTechs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [uploadingId, setUploadingId] = useState(null); // Track which job is uploading
 
@@ -98,15 +99,14 @@ function App() {
       {/* NAVBAR */}
       <nav className="bg-slate-800 border-b border-slate-700 p-4 sticky top-0 z-50">
         <div className="flex items-center gap-2">
-        <div className="bg-blue-600 p-2 rounded-lg"><Briefcase size={24} className="text-white" /></div>
-        <h1 className="font-bold text-lg tracking-tight">
-          Smart Hands <span className="text-xs bg-red-500 text-white px-1 rounded">v3.0</span>
-        </h1>
-      </div>
-          <div className="flex bg-slate-700 rounded-full p-1 gap-1">
-            <button onClick={() => setViewMode('manager')} className={`p-2 rounded-full ${viewMode === 'manager' ? 'bg-blue-600' : 'text-slate-400'}`}><Briefcase size={16} /></button>
-            <button onClick={() => setViewMode('tech')} className={`p-2 rounded-full ${viewMode === 'tech' ? 'bg-emerald-600' : 'text-slate-400'}`}><Wrench size={16} /></button>
-          </div>
+          <div className="bg-blue-600 p-2 rounded-lg"><Briefcase size={24} className="text-white" /></div>
+          <h1 className="font-bold text-lg tracking-tight">
+            Smart Hands <span className="text-xs bg-red-500 text-white px-1 rounded">v3.0</span>
+          </h1>
+        </div>
+        <div className="flex bg-slate-700 rounded-full p-1 gap-1 mt-4">
+          <button onClick={() => setViewMode('manager')} className={`p-2 rounded-full ${viewMode === 'manager' ? 'bg-blue-600' : 'text-slate-400'}`}><Briefcase size={16} /></button>
+          <button onClick={() => setViewMode('tech')} className={`p-2 rounded-full ${viewMode === 'tech' ? 'bg-emerald-600' : 'text-slate-400'}`}><Wrench size={16} /></button>
         </div>
       </nav>
 
