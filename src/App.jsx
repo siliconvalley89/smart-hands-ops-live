@@ -50,6 +50,7 @@ function App() {
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
   const [loginError, setLoginError] = useState('');
+  const [appError, setAppError] = useState('');
   const [jobs, setJobs] = useState([]);
   const [techs, setTechs] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -63,19 +64,25 @@ function App() {
 
   useEffect(() => {
     const authUnsub = onAuthStateChanged(auth, async (user) => {
-      setFirebaseUser(user);
-      if (user) {
-        const usersQuery = query(collection(db, 'users'), where('uid', '==', user.uid));
-        const userSnapshot = await getDocs(usersQuery);
-        if (!userSnapshot.empty) {
-          setProfile({ id: userSnapshot.docs[0].id, ...userSnapshot.docs[0].data() });
+      try {
+        setFirebaseUser(user);
+        if (user) {
+          const usersQuery = query(collection(db, 'users'), where('uid', '==', user.uid));
+          const userSnapshot = await getDocs(usersQuery);
+          if (!userSnapshot.empty) {
+            setProfile({ id: userSnapshot.docs[0].id, ...userSnapshot.docs[0].data() });
+          } else {
+            setProfile(null);
+          }
         } else {
           setProfile(null);
         }
-      } else {
-        setProfile(null);
+      } catch (error) {
+        console.error('Auth state load failed', error);
+        setAppError('Unable to load account data.');
+      } finally {
+        setAuthReady(true);
       }
-      setAuthReady(true);
     });
 
     return () => authUnsub();
@@ -83,8 +90,13 @@ function App() {
 
   useEffect(() => {
     const checkUsers = async () => {
-      const snapshot = await getDocs(collection(db, 'users'));
-      setAdminSetupAllowed(snapshot.empty);
+      try {
+        const snapshot = await getDocs(collection(db, 'users'));
+        setAdminSetupAllowed(snapshot.empty);
+      } catch (error) {
+        console.error('Unable to check users collection', error);
+        setAppError('Unable to check admin setup status.');
+      }
     };
     checkUsers();
   }, []);
@@ -282,6 +294,35 @@ function App() {
     });
   };
 
+  const handlePhotoUpload = async (event, jobId, type) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    try {
+      setUploadingId(jobId);
+      const storageRef = ref(storage, `jobs/${jobId}/${type}-${file.name}`);
+      await uploadBytes(storageRef, file);
+      const url = await getDownloadURL(storageRef);
+      await updateDoc(doc(db, 'jobs', jobId), {
+        [`${type}PhotoUrl`]: url,
+        updatedAt: new Date(),
+      });
+    } catch (error) {
+      console.error('Photo upload failed', error);
+      setAppError('Photo upload failed.');
+    } finally {
+      setUploadingId(null);
+    }
+  };
+
+  const handleDelete = async (jobId) => {
+    try {
+      await deleteDoc(doc(db, 'jobs', jobId));
+    } catch (error) {
+      console.error('Delete job failed', error);
+      setAppError('Unable to delete job.');
+    }
+  };
+
   const currentJobs = profile?.role === 'admin'
     ? jobs
     : profile?.role === 'tech'
@@ -403,6 +444,11 @@ function App() {
       </nav>
 
       <main className="max-w-6xl mx-auto p-4 space-y-6">
+        {appError && (
+          <div className="rounded-3xl bg-red-900/20 border border-red-700 p-4 text-red-100">
+            {appError}
+          </div>
+        )}
         <section className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div className="bg-slate-800 rounded-3xl border border-slate-700 p-5">
             <div className="flex items-center gap-3 text-slate-400 uppercase tracking-[0.2em] text-xs">Role</div>
