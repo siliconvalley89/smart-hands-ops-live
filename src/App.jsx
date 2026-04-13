@@ -3,6 +3,8 @@ import { db, storage, auth } from './firebase';
 import { collection, onSnapshot, addDoc, query, orderBy, deleteDoc, doc, updateDoc, getDocs, setDoc, where } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut as firebaseSignOut, onAuthStateChanged } from 'firebase/auth';
+import { jsPDF } from 'jspdf';
+import logoPath from './assets/logo.jpg';
 import {
   Briefcase,
   Wrench,
@@ -28,6 +30,62 @@ const formatDate = (value) => {
 
 const calcInvoiceTotal = (items = []) => {
   return items.reduce((sum, item) => sum + (Number(item.qty || 0) * Number(item.unitPrice || 0)), 0);
+};
+
+const APP_DISPLAY_NAME = 'SV Smart Dispatch';
+const BUSINESS_NAME = 'Silicon Valley Smart Hands LLC';
+
+const loadImageDataUrl = async (url) => {
+  const response = await fetch(url);
+  const blob = await response.blob();
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+};
+
+const generateInvoicePdf = async (job) => {
+  try {
+    const doc = new jsPDF({ unit: 'pt', format: 'letter' });
+    const logoDataUrl = await loadImageDataUrl(logoPath);
+    doc.addImage(logoDataUrl, 'JPEG', 40, 40, 120, 40);
+    doc.setFontSize(18);
+    doc.text(BUSINESS_NAME, 40, 100);
+    doc.setFontSize(12);
+    doc.text(`Invoice ID: ${job.id}`, 40, 125);
+    doc.text(`Date: ${formatDate(job.createdAt)}`, 40, 145);
+    doc.text(`Client: ${job.client}`, 40, 165);
+    doc.text(`Location: ${job.location}`, 40, 185);
+    doc.text(`Assigned Tech: ${job.assignedTechName || 'N/A'}`, 40, 205);
+    doc.text(`Service: ${job.task}`, 40, 225);
+    doc.text('Consumables:', 40, 255);
+
+    let y = 275;
+    const consumables = job.consumables || [];
+    if (consumables.length === 0) {
+      doc.text('None', 40, y);
+      y += 20;
+    } else {
+      doc.setFontSize(11);
+      consumables.forEach((item) => {
+        const amount = Number(item.qty || 0) * Number(item.unitPrice || 0);
+        doc.text(`${item.description} - ${item.qty} x $${Number(item.unitPrice || 0).toFixed(2)} = $${amount.toFixed(2)}`, 40, y);
+        y += 18;
+      });
+      y += 10;
+    }
+
+    doc.setFontSize(12);
+    doc.text(`Total: $${calcInvoiceTotal(consumables).toFixed(2)}`, 40, y + 10);
+    doc.setFontSize(10);
+    doc.text('Thank you for choosing Silicon Valley Smart Hands LLC.', 40, y + 35);
+    doc.save(`SV-Smart-Dispatch-Invoice-${job.id}.pdf`);
+  } catch (error) {
+    console.error('Invoice generation failed', error);
+    setAppError('Unable to generate invoice PDF.');
+  }
 };
 
 const calculateDistanceKm = (lat1, lon1, lat2, lon2) => {
@@ -369,8 +427,7 @@ function App() {
           <div className="mb-6 flex items-center gap-3">
             <div className="bg-blue-600 p-3 rounded-xl"><Lock size={24} /></div>
             <div>
-              <h1 className="text-2xl font-bold">Smart Hands Login</h1>
-              <p className="text-slate-400 text-sm">Sign in with your company email and password.</p>
+              <h1 className="text-2xl font-bold">{APP_DISPLAY_NAME} Login</h1>
             </div>
           </div>
 
@@ -440,7 +497,7 @@ function App() {
         <div className="max-w-lg w-full bg-slate-900 border border-slate-700 rounded-3xl p-8 shadow-2xl text-center">
           <h1 className="text-2xl font-bold">Account not set up yet</h1>
           <p className="text-slate-400 mt-4">Your Firebase user exists, but no role profile was found.</p>
-          <p className="text-slate-400 mt-2">Create a record in the Firestore `users` collection with your UID, displayName, email, and role.</p>
+          <p className="text-slate-400 mt-2">Create a record in the Firestore users collection with your UID, displayName, email, and role.</p>
           <button onClick={logout} className="mt-6 rounded-2xl bg-blue-600 px-4 py-3 text-white font-semibold hover:bg-blue-500 transition">
             Sign out
           </button>
@@ -457,7 +514,7 @@ function App() {
             <div className="bg-blue-600 p-2 rounded-lg"><Briefcase size={24} className="text-white" /></div>
             <div>
               <div className="text-slate-400 text-sm">Signed in as {profile.displayName}</div>
-              <h1 className="text-xl font-bold">Smart Hands Dispatch</h1>
+              <h1 className="text-xl font-bold">{APP_DISPLAY_NAME}</h1>
             </div>
           </div>
           <button onClick={logout} className="rounded-2xl bg-slate-700 px-4 py-2 text-slate-200 hover:bg-slate-600 flex items-center gap-2">
@@ -739,7 +796,14 @@ function App() {
                               <span>Total</span>
                               <span className="font-semibold text-slate-100">${total.toFixed(2)}</span>
                             </div>
-                            <div className="text-slate-500 text-xs">Only admin and client see invoice amounts.</div>
+                            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                              <div className="text-slate-500 text-xs">Only admin and client see invoice amounts.</div>
+                              {job.status !== 'Pending' && (
+                                <button onClick={() => generateInvoicePdf(job)} className="rounded-2xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-500 transition">
+                                  Download invoice
+                                </button>
+                              )}
+                            </div>
                           </div>
                         )}
                       </div>
