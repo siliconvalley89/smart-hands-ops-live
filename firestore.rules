@@ -1,0 +1,54 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function getUserRole() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && getUserRole() == 'admin';
+    }
+
+    function isTech() {
+      return isSignedIn() && getUserRole() == 'tech';
+    }
+
+    function isClient() {
+      return isSignedIn() && getUserRole() == 'client';
+    }
+
+    match /users/{userId} {
+      allow read: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+      allow create: if isSignedIn() && isAdmin();
+      allow update, delete: if isAdmin();
+    }
+
+    match /technicians/{techId} {
+      allow read: if isSignedIn();
+      allow create, update, delete: if isAdmin();
+    }
+
+    match /jobs/{jobId} {
+      allow read: if isSignedIn() && (
+        isAdmin() ||
+        resource.data.clientEmail == request.auth.token.email ||
+        resource.data.assignedTechEmail == request.auth.token.email
+      );
+
+      allow create: if isSignedIn() && (
+        isAdmin() ||
+        (isClient() && request.resource.data.clientEmail == request.auth.token.email)
+      );
+
+      allow update: if isSignedIn() && (
+        isAdmin() ||
+        (isTech() && resource.data.assignedTechEmail == request.auth.token.email) ||
+        (isClient() && resource.data.clientEmail == request.auth.token.email)
+      );
+    }
+  }
+}
