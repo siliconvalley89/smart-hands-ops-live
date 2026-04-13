@@ -94,6 +94,10 @@ const generateInvoicePdf = async (job) => {
     doc.setFontSize(10);
     doc.text('Thank you for choosing Silicon Valley Smart Hands LLC.', 40, footerY);
     doc.save(`SV-Smart-Dispatch-Invoice-${job.id}.pdf`);
+    await updateDoc(doc(db, 'jobs', job.id), {
+      invoiceSent: true,
+      invoiceSentAt: new Date(),
+    });
   } catch (error) {
     console.error('Invoice generation failed', error);
     setAppError('Unable to generate invoice PDF.');
@@ -132,6 +136,7 @@ function App() {
   const [techMessage, setTechMessage] = useState('');
   const [newConsumable, setNewConsumable] = useState({ description: '', qty: 1, unitPrice: '' });
   const [serviceFeeInputs, setServiceFeeInputs] = useState({});
+  const [consumableEdits, setConsumableEdits] = useState({});
   const [assignments, setAssignments] = useState({});
 
   useEffect(() => {
@@ -320,6 +325,7 @@ function App() {
         consumables: [],
         serviceFee: 0,
         serviceFeeDescription: '',
+        invoiceSent: false,
         beforePhotoUrl: '',
         afterPhotoUrl: '',
         clientSignedOff: false,
@@ -376,13 +382,77 @@ function App() {
   };
 
   const addServiceFee = async (job) => {
+    if (profile?.role !== 'admin') {
+      setAppError('Only admins can add or change the service fee.');
+      return;
+    }
     const serviceInput = serviceFeeInputs[job.id] || { amount: '', description: '' };
     if (!serviceInput.amount) return;
+    if (job.invoiceSent) {
+      setAppError('Cannot update service fee after the invoice has been sent.');
+      return;
+    }
     await updateDoc(doc(db, 'jobs', job.id), {
       serviceFee: Number(serviceInput.amount),
       serviceFeeDescription: serviceInput.description || '',
     });
     setServiceFeeInputs((prev) => ({ ...prev, [job.id]: { amount: '', description: '' } }));
+  };
+
+  const updateConsumableField = (jobId, index, field, value) => {
+    setConsumableEdits((prev) => ({
+      ...prev,
+      [jobId]: {
+        ...(prev[jobId] || {}),
+        [index]: {
+          ...(prev[jobId]?.[index] || {}),
+          [field]: value,
+        },
+      },
+    }));
+  };
+
+  const saveConsumableChange = async (job, index) => {
+    if (job.invoiceSent) {
+      setAppError('Cannot modify consumables after the invoice has been sent.');
+      return;
+    }
+    const itemEdit = consumableEdits[job.id]?.[index];
+    if (!itemEdit) return;
+    const updatedConsumables = (job.consumables || []).map((item, idx) =>
+      idx === index
+        ? {
+            ...item,
+            description: itemEdit.description ?? item.description,
+            qty: Number(itemEdit.qty ?? item.qty),
+            unitPrice: Number(itemEdit.unitPrice ?? item.unitPrice),
+          }
+        : item
+    );
+    await updateDoc(doc(db, 'jobs', job.id), {
+      consumables: updatedConsumables,
+    });
+    setConsumableEdits((prev) => {
+      const jobEdits = { ...(prev[job.id] || {}) };
+      delete jobEdits[index];
+      return { ...prev, [job.id]: jobEdits };
+    });
+  };
+
+  const deleteConsumable = async (job, index) => {
+    if (job.invoiceSent) {
+      setAppError('Cannot delete consumables after the invoice has been sent.');
+      return;
+    }
+    const updatedConsumables = (job.consumables || []).filter((_, idx) => idx !== index);
+    await updateDoc(doc(db, 'jobs', job.id), {
+      consumables: updatedConsumables,
+    });
+    setConsumableEdits((prev) => {
+      const jobEdits = { ...(prev[job.id] || {}) };
+      delete jobEdits[index];
+      return { ...prev, [job.id]: jobEdits };
+    });
   };
 
   const requestClientSignoff = async (job) => {
@@ -815,24 +885,73 @@ function App() {
                             <div className="text-slate-500">No consumables yet.</div>
                           ) : (
                             <div className="space-y-2">
-                              {job.consumables.map((item, index) => (
-                                <div key={`${job.id}-${index}`} className="rounded-2xl bg-slate-900 p-3 border border-slate-700">
-                                  <div className="flex items-center justify-between gap-3">
-                                    <div>
-                                      <p className="text-slate-100">{item.description}</p>
-                                      <p className="text-slate-500 text-sm">Qty: {item.qty}</p>
-                                    </div>
-                                    {canViewInvoice ? (
-                                      <div className="text-right text-slate-200">
-                                        <div>${item.unitPrice.toFixed(2)} each</div>
-                                        <div className="text-slate-400 text-sm">${(item.qty * item.unitPrice).toFixed(2)}</div>
+                              {job.consumables.map((item, index) => {
+                                const edit = consumableEdits[job.id]?.[index] || {};
+                                const itemDescription = edit.description ?? item.description;
+                                const itemQty = edit.qty ?? item.qty;
+                                const itemUnitPrice = edit.unitPrice ?? item.unitPrice;
+                                return (
+                                  <div key={`${job.id}-${index}`} className="rounded-2xl bg-slate-900 p-3 border border-slate-700">
+                                    <div className="flex flex-col gap-3">
+                                      <div className="flex items-start justify-between gap-3">
+                                        <div>
+                                          {job.invoiceSent ? (
+                                            <p className="text-slate-100">{item.description}</p>
+                                          ) : (
+                                            <input
+                                              value={itemDescription}
+                                              onChange={(e) => updateConsumableField(job.id, index, 'description', e.target.value)}
+                                              className="w-full rounded-2xl border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100"
+                                            />
+                                          )}
+                                          <p className="text-slate-500 text-sm">Qty: {itemQty}</p>
+                                        </div>
+                                        {canViewInvoice ? (
+                                          <div className="text-right text-slate-200">
+                                            <div>${Number(itemUnitPrice).toFixed(2)} each</div>
+                                            <div className="text-slate-400 text-sm">${(Number(itemQty) * Number(itemUnitPrice)).toFixed(2)}</div>
+                                          </div>
+                                        ) : (
+                                          <div className="text-slate-400 text-sm">Amount hidden</div>
+                                        )}
                                       </div>
-                                    ) : (
-                                      <div className="text-slate-400 text-sm">Amount hidden</div>
-                                    )}
+                                      {!job.invoiceSent && ['tech', 'admin'].includes(profile.role) && (
+                                        <div className="grid gap-2 sm:grid-cols-[1fr_auto_auto]">
+                                          <input
+                                            type="number"
+                                            min="1"
+                                            value={itemQty}
+                                            onChange={(e) => updateConsumableField(job.id, index, 'qty', e.target.value)}
+                                            className="rounded-2xl border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100"
+                                          />
+                                          <input
+                                            type="number"
+                                            min="0"
+                                            step="0.01"
+                                            value={itemUnitPrice}
+                                            onChange={(e) => updateConsumableField(job.id, index, 'unitPrice', e.target.value)}
+                                            className="rounded-2xl border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100"
+                                          />
+                                          <button
+                                            onClick={() => saveConsumableChange(job, index)}
+                                            className="rounded-2xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500 transition"
+                                          >
+                                            Save
+                                          </button>
+                                        </div>
+                                      )}
+                                      {!job.invoiceSent && ['tech', 'admin'].includes(profile.role) && (
+                                        <button
+                                          onClick={() => deleteConsumable(job, index)}
+                                          className="rounded-2xl bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-500 transition"
+                                        >
+                                          Delete
+                                        </button>
+                                      )}
+                                    </div>
                                   </div>
-                                </div>
-                              ))}
+                                );
+                              })}
                             </div>
                           )}
                         </div>
@@ -876,7 +995,7 @@ function App() {
                             )}
                           </div>
                         )}
-                        {['tech', 'admin'].includes(profile.role) && (
+                        {!job.invoiceSent && profile?.role === 'admin' && (
                           <div className="mt-4 space-y-3">
                             <input
                               type="text"
@@ -907,7 +1026,7 @@ function App() {
                               className="w-full rounded-2xl border border-slate-700 bg-slate-900 px-4 py-3 text-slate-100"
                             />
                             <button onClick={() => addServiceFee(job)} className="w-full rounded-2xl bg-violet-600 px-4 py-3 text-white font-semibold hover:bg-violet-500 transition flex items-center justify-center gap-2">
-                              <Plus size={16} /> Add service fee
+                              <Plus size={16} /> Add / update service fee
                             </button>
                           </div>
                         )}
