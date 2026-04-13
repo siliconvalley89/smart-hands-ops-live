@@ -119,6 +119,7 @@ function App() {
   const [newTech, setNewTech] = useState({ name: '', email: '', phone: '', location: '' });
   const [techMessage, setTechMessage] = useState('');
   const [newConsumable, setNewConsumable] = useState({ description: '', qty: 1, unitPrice: '' });
+  const [assignments, setAssignments] = useState({});
 
   useEffect(() => {
     const authUnsub = onAuthStateChanged(auth, async (user) => {
@@ -399,6 +400,53 @@ function App() {
     } catch (error) {
       console.error('Delete job failed', error);
       setAppError('Unable to delete job.');
+    }
+  };
+
+  const assignTechnicianToJob = async (job) => {
+    const techId = assignments[job.id];
+    if (!techId) {
+      setAppError('Select a technician first to assign this job.');
+      return;
+    }
+
+    const tech = techs.find((item) => item.id === techId);
+    if (!tech) {
+      setAppError('Selected technician not found.');
+      return;
+    }
+
+    try {
+      const jobRef = doc(db, 'jobs', job.id);
+      const distanceKm = job.lat != null && job.lng != null && tech.lat != null && tech.lng != null
+        ? calculateDistanceKm(job.lat, job.lng, tech.lat, tech.lng)
+        : null;
+
+      await updateDoc(jobRef, {
+        assignedTechName: tech.name,
+        assignedTechEmail: tech.email,
+        assignedTechDistanceKm: distanceKm,
+        status: 'Dispatched',
+      });
+
+      await updateDoc(doc(db, 'technicians', tech.id), {
+        status: 'busy',
+        lastAssignedAt: new Date(),
+      });
+
+      if (job.assignedTechEmail && job.assignedTechEmail !== tech.email) {
+        const previousTech = techs.find((item) => item.email === job.assignedTechEmail || item.name === job.assignedTechName);
+        if (previousTech && previousTech.status === 'busy') {
+          await updateDoc(doc(db, 'technicians', previousTech.id), {
+            status: 'available',
+          });
+        }
+      }
+
+      setAppError('');
+    } catch (error) {
+      console.error('Manual assignment failed', error);
+      setAppError('Unable to assign technician.');
     }
   };
 
@@ -804,6 +852,33 @@ function App() {
                                 </button>
                               )}
                             </div>
+                          </div>
+                        )}
+                        {profile.role === 'admin' && (job.status === 'Pending' || !job.assignedTechName) && (
+                          <div className="mt-4 rounded-2xl bg-slate-950/80 border border-slate-700 p-4">
+                            <div className="text-slate-400 text-sm mb-3">Manual assignment</div>
+                            <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
+                              <select
+                                value={assignments[job.id] || ''}
+                                onChange={(e) => setAssignments((prev) => ({ ...prev, [job.id]: e.target.value }))}
+                                className="w-full rounded-2xl border border-slate-700 bg-slate-900 px-4 py-3 text-slate-100"
+                              >
+                                <option value="">Select technician</option>
+                                {techs.map((tech) => (
+                                  <option key={tech.id} value={tech.id}>
+                                    {tech.name} {tech.status === 'busy' ? '(busy)' : '(available)'}
+                                  </option>
+                                ))}
+                              </select>
+                              <button
+                                type="button"
+                                onClick={() => assignTechnicianToJob(job)}
+                                className="rounded-2xl bg-emerald-600 px-4 py-3 text-sm font-semibold text-white hover:bg-emerald-500 transition"
+                              >
+                                Assign technician
+                              </button>
+                            </div>
+                            <div className="text-slate-500 text-xs mt-2">Use this if auto-assignment did not assign the job.</div>
                           </div>
                         )}
                       </div>
