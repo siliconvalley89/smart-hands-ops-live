@@ -60,25 +60,33 @@ const generateInvoicePdf = async (job) => {
     doc.text(`Location: ${job.location}`, 40, 185);
     doc.text(`Assigned Tech: ${job.assignedTechName || 'N/A'}`, 40, 205);
     doc.text(`Service: ${job.task}`, 40, 225);
-    doc.text('Consumables:', 40, 255);
+    let y = 255;
+    doc.setFontSize(12);
+    doc.text('Service details:', 40, y);
+    y += 18;
+    doc.setFontSize(11);
+    doc.text(job.details || 'N/A', 40, y);
+    y += 28;
+    doc.setFontSize(12);
+    doc.text('Consumables:', 40, y);
 
-    let y = 275;
+    let yConsumables = y + 20;
     const consumables = job.consumables || [];
     if (consumables.length === 0) {
-      doc.text('None', 40, y);
-      y += 20;
+      doc.text('None', 40, yConsumables);
+      yConsumables += 20;
     } else {
       doc.setFontSize(11);
       consumables.forEach((item) => {
         const amount = Number(item.qty || 0) * Number(item.unitPrice || 0);
-        doc.text(`${item.description} - ${item.qty} x $${Number(item.unitPrice || 0).toFixed(2)} = $${amount.toFixed(2)}`, 40, y);
-        y += 18;
+        doc.text(`${item.description} - ${item.qty} x $${Number(item.unitPrice || 0).toFixed(2)} = $${amount.toFixed(2)}`, 40, yConsumables);
+        yConsumables += 18;
       });
-      y += 10;
+      yConsumables += 10;
     }
 
     doc.setFontSize(12);
-    doc.text(`Total: $${calcInvoiceTotal(consumables).toFixed(2)}`, 40, y + 10);
+    doc.text(`Total: $${calcInvoiceTotal(consumables).toFixed(2)}`, 40, yConsumables + 10);
     doc.setFontSize(10);
     doc.text('Thank you for choosing Silicon Valley Smart Hands LLC.', 40, y + 35);
     doc.save(`SV-Smart-Dispatch-Invoice-${job.id}.pdf`);
