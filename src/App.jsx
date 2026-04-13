@@ -28,8 +28,8 @@ const formatDate = (value) => {
   return new Date(value).toLocaleString();
 };
 
-const calcInvoiceTotal = (items = []) => {
-  return items.reduce((sum, item) => sum + (Number(item.qty || 0) * Number(item.unitPrice || 0)), 0);
+const calcInvoiceTotal = (items = [], serviceFee = 0) => {
+  return items.reduce((sum, item) => sum + (Number(item.qty || 0) * Number(item.unitPrice || 0)), 0) + Number(serviceFee || 0);
 };
 
 const APP_DISPLAY_NAME = 'SV Smart Dispatch';
@@ -60,7 +60,8 @@ const generateInvoicePdf = async (job) => {
     doc.text(`Location: ${job.location}`, 40, 185);
     doc.text(`Assigned Tech: ${job.assignedTechName || 'N/A'}`, 40, 205);
     doc.text(`Service: ${job.task}`, 40, 225);
-    let y = 255;
+    doc.text(`Service fee: $${Number(job.serviceFee || 0).toFixed(2)}`, 40, 245);
+    let y = 270;
     doc.setFontSize(12);
     doc.text('Service details:', 40, y);
     y += 18;
@@ -86,7 +87,7 @@ const generateInvoicePdf = async (job) => {
     }
 
     doc.setFontSize(12);
-    doc.text(`Total: $${calcInvoiceTotal(consumables).toFixed(2)}`, 40, yConsumables + 10);
+    doc.text(`Total: $${calcInvoiceTotal(consumables, job.serviceFee).toFixed(2)}`, 40, yConsumables + 10);
     doc.setFontSize(10);
     doc.text('Thank you for choosing Silicon Valley Smart Hands LLC.', 40, y + 35);
     doc.save(`SV-Smart-Dispatch-Invoice-${job.id}.pdf`);
@@ -127,6 +128,7 @@ function App() {
   const [newTech, setNewTech] = useState({ name: '', email: '', phone: '', location: '' });
   const [techMessage, setTechMessage] = useState('');
   const [newConsumable, setNewConsumable] = useState({ description: '', qty: 1, unitPrice: '' });
+  const [serviceFeeInputs, setServiceFeeInputs] = useState({});
   const [assignments, setAssignments] = useState({});
 
   useEffect(() => {
@@ -297,7 +299,7 @@ function App() {
     try {
       const geo = await geocodeAddress(requestForm.location);
       const nearest = await assignNearestTechnician(geo.lat, geo.lng);
-      await addDoc(collection(db, 'jobs'), {
+        await addDoc(collection(db, 'jobs'), {
         client: requestForm.name,
         clientEmail: requestForm.email,
         clientPhone: requestForm.phone,
@@ -313,6 +315,7 @@ function App() {
         assignedTechDistanceMiles: nearest?.distanceMiles || null,
         assignedTechDistanceKm: nearest?.distanceKm || null,
         consumables: [],
+        serviceFee: 0,
         beforePhotoUrl: '',
         afterPhotoUrl: '',
         clientSignedOff: false,
@@ -366,6 +369,15 @@ function App() {
       consumables: [...(job.consumables || []), item],
     });
     setNewConsumable({ description: '', qty: 1, unitPrice: '' });
+  };
+
+  const addServiceFee = async (job) => {
+    const serviceInput = serviceFeeInputs[job.id] || { amount: '' };
+    if (!serviceInput.amount) return;
+    await updateDoc(doc(db, 'jobs', job.id), {
+      serviceFee: Number(serviceInput.amount),
+    });
+    setServiceFeeInputs((prev) => ({ ...prev, [job.id]: { amount: '' } }));
   };
 
   const requestClientSignoff = async (job) => {
@@ -725,7 +737,7 @@ function App() {
           ) : (
             <div className="space-y-6">
               {currentJobs.map((job) => {
-                const total = calcInvoiceTotal(job.consumables || []);
+                const total = calcInvoiceTotal(job.consumables || [], job.serviceFee);
                 const beforeReady = Boolean(job.beforePhotoUrl);
                 const afterReady = Boolean(job.afterPhotoUrl);
                 const canRequestSignoff = profile.role === 'tech' && job.status === 'Dispatched' && beforeReady && afterReady;
@@ -847,6 +859,31 @@ function App() {
                             </div>
                             <button onClick={() => addConsumable(job)} className="w-full rounded-2xl bg-blue-600 px-4 py-3 text-white font-semibold hover:bg-blue-500 transition flex items-center justify-center gap-2">
                               <Plus size={16} /> Add consumable
+                            </button>
+                          </div>
+                        )}
+                        {(job.serviceFee || job.serviceFee === 0) && (
+                          <div className="mt-4 rounded-2xl bg-slate-900 p-3 border border-slate-700 text-slate-200">
+                            <div className="text-slate-400 text-sm">Service fee</div>
+                            <div className="font-semibold text-slate-100">${Number(job.serviceFee || 0).toFixed(2)}</div>
+                          </div>
+                        )}
+                        {['tech', 'admin'].includes(profile.role) && (
+                          <div className="mt-4 space-y-3">
+                            <input
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              value={serviceFeeInputs[job.id]?.amount || ''}
+                              onChange={(e) => setServiceFeeInputs((prev) => ({
+                                ...prev,
+                                [job.id]: { amount: e.target.value },
+                              }))}
+                              placeholder="Service fee amount"
+                              className="w-full rounded-2xl border border-slate-700 bg-slate-900 px-4 py-3 text-slate-100"
+                            />
+                            <button onClick={() => addServiceFee(job)} className="w-full rounded-2xl bg-violet-600 px-4 py-3 text-white font-semibold hover:bg-violet-500 transition flex items-center justify-center gap-2">
+                              <Plus size={16} /> Add service fee
                             </button>
                           </div>
                         )}
