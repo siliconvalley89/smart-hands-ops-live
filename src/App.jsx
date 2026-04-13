@@ -1,5 +1,5 @@
 ﻿import React, { useState, useEffect } from 'react';
-import { db, storage, auth } from './firebase';
+import { db, storage, auth, adminAuth } from './firebase';
 import { collection, onSnapshot, addDoc, query, orderBy, deleteDoc, doc, updateDoc, getDocs, setDoc, where } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut as firebaseSignOut, onAuthStateChanged } from 'firebase/auth';
@@ -137,7 +137,10 @@ function App() {
   const [newConsumable, setNewConsumable] = useState({ description: '', qty: 1, unitPrice: '' });
   const [serviceFeeInputs, setServiceFeeInputs] = useState({});
   const [consumableEdits, setConsumableEdits] = useState({});
+  const [newAccount, setNewAccount] = useState({ name: '', email: '', password: '', role: 'tech', phone: '', location: '', adminPassword: '' });
+  const [accountMessage, setAccountMessage] = useState('');
   const [assignments, setAssignments] = useState({});
+  const [users, setUsers] = useState([]);
 
   useEffect(() => {
     const authUnsub = onAuthStateChanged(auth, async (user) => {
@@ -193,6 +196,15 @@ function App() {
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const techItems = snapshot.docs.map((docItem) => ({ id: docItem.id, ...docItem.data() }));
       setTechs(techItems);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    const q = query(collection(db, 'users'), orderBy('displayName', 'asc'));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const userItems = snapshot.docs.map((docItem) => ({ id: docItem.id, ...docItem.data() }));
+      setUsers(userItems);
     });
     return () => unsubscribe();
   }, []);
@@ -365,6 +377,71 @@ function App() {
     } catch (error) {
       console.error('Add technician failed', error);
       setTechMessage('Could not add technician. Please check the location.');
+    }
+  };
+
+  const createAccount = async () => {
+    setAccountMessage('');
+    if (!newAccount.name || !newAccount.email || !newAccount.password || !newAccount.role || !newAccount.adminPassword) {
+      setAccountMessage('Please fill all required account fields, including your admin password.');
+      return;
+    }
+    if (newAccount.role === 'tech' && !newAccount.location) {
+      setAccountMessage('Please enter a base location for technician accounts.');
+      return;
+    }
+    try {
+      const adminEmail = profile?.email;
+      const adminPassword = newAccount.adminPassword;
+      const result = await createUserWithEmailAndPassword(auth, newAccount.email.trim(), newAccount.password.trim());
+      const user = result.user;
+      await setDoc(doc(db, 'users', user.uid), {
+        uid: user.uid,
+        displayName: newAccount.name,
+        email: newAccount.email.trim(),
+        role: newAccount.role,
+      });
+
+      if (newAccount.role === 'tech') {
+        const geo = await geocodeAddress(newAccount.location);
+        await setDoc(doc(db, 'technicians', user.uid), {
+          uid: user.uid,
+          name: newAccount.name,
+          email: newAccount.email.trim(),
+          phone: newAccount.phone || '',
+          location: geo.displayName,
+          rawLocation: newAccount.location,
+          lat: geo.lat,
+          lng: geo.lng,
+          status: 'available',
+          createdAt: new Date(),
+        });
+      }
+
+      await firebaseSignOut(auth);
+      await signInWithEmailAndPassword(auth, adminEmail, adminPassword);
+      setAccountMessage(`${newAccount.role === 'tech' ? 'Technician' : 'Client'} account created successfully.`);
+      setNewAccount({ name: '', email: '', password: '', role: 'tech', phone: '', location: '', adminPassword: '' });
+    } catch (error) {
+      console.error('Create account failed', error);
+      setAccountMessage(error.message || 'Unable to create account.');
+    }
+  };
+
+  const deleteUser = async (userId, userRole) => {
+    if (!window.confirm('Are you sure you want to delete this user? This action cannot be undone.')) {
+      return;
+    }
+    try {
+      await deleteDoc(doc(db, 'users', userId));
+      if (userRole === 'tech') {
+        await deleteDoc(doc(db, 'technicians', userId));
+      }
+      setAccountMessage('User deleted successfully.');
+      setTimeout(() => setAccountMessage(''), 3000);
+    } catch (error) {
+      console.error('Delete user failed', error);
+      setAccountMessage('Unable to delete user.');
     }
   };
 
@@ -765,6 +842,7 @@ function App() {
         )}
 
         {profile.role === 'admin' && (
+          <>
           <section className="bg-slate-800 rounded-3xl border border-slate-700 p-5">
             <div className="flex items-center gap-3 mb-4 text-lg font-semibold"><Wrench size={20} /> Add technician</div>
             <form onSubmit={addTechnician} className="grid gap-4">
@@ -802,6 +880,80 @@ function App() {
               </button>
             </form>
           </section>
+
+          <section className="rounded-3xl bg-slate-950/60 border border-slate-700 p-6 grid gap-6">
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <h2 className="text-xl font-semibold text-white">Create user account</h2>
+                <p className="text-slate-400 mt-1">Create a technician or client login directly from the admin panel.</p>
+              </div>
+            </div>
+
+            <div className="grid gap-4 md:grid-cols-2">
+              <input
+                value={newAccount.name}
+                onChange={(e) => setNewAccount((prev) => ({ ...prev, name: e.target.value }))}
+                placeholder="Full name"
+                className="w-full rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3 text-slate-100"
+              />
+              <input
+                value={newAccount.email}
+                onChange={(e) => setNewAccount((prev) => ({ ...prev, email: e.target.value }))}
+                placeholder="Email"
+                className="w-full rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3 text-slate-100"
+              />
+              <input
+                type="password"
+                value={newAccount.password}
+                onChange={(e) => setNewAccount((prev) => ({ ...prev, password: e.target.value }))}
+                placeholder="Account password"
+                className="w-full rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3 text-slate-100"
+              />
+              <select
+                value={newAccount.role}
+                onChange={(e) => setNewAccount((prev) => ({ ...prev, role: e.target.value }))}
+                className="w-full rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3 text-slate-100"
+              >
+                <option value="tech">Technician</option>
+                <option value="client">Client</option>
+              </select>
+            </div>
+
+            {newAccount.role === 'tech' && (
+              <div className="grid gap-4 md:grid-cols-2">
+                <input
+                  value={newAccount.phone}
+                  onChange={(e) => setNewAccount((prev) => ({ ...prev, phone: e.target.value }))}
+                  placeholder="Phone"
+                  className="w-full rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3 text-slate-100"
+                />
+                <input
+                  value={newAccount.location}
+                  onChange={(e) => setNewAccount((prev) => ({ ...prev, location: e.target.value }))}
+                  placeholder="Base location"
+                  className="w-full rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3 text-slate-100"
+                />
+              </div>
+            )}
+            <div className="grid gap-4 md:grid-cols-2">
+              <input
+                type="password"
+                value={newAccount.adminPassword}
+                onChange={(e) => setNewAccount((prev) => ({ ...prev, adminPassword: e.target.value }))}
+                placeholder="Your admin password"
+                className="w-full rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3 text-slate-100"
+              />
+              <div className="rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3 text-slate-400 flex items-center">
+                This is required to restore your admin session after creating the new account.
+              </div>
+            </div>
+
+            {accountMessage && <div className="rounded-2xl bg-blue-900/50 p-3 text-blue-200">{accountMessage}</div>}
+            <button onClick={createAccount} type="button" className="rounded-2xl bg-indigo-600 px-5 py-3 text-white font-semibold hover:bg-indigo-500 transition flex items-center justify-center gap-2">
+              <Plus size={16} /> Create account
+            </button>
+          </section>
+          </>
         )}
 
         <section className="grid gap-6">
