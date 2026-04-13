@@ -88,9 +88,9 @@ const generateInvoicePdf = async (job) => {
   }
 };
 
-const calculateDistanceKm = (lat1, lon1, lat2, lon2) => {
+const calculateDistanceMiles = (lat1, lon1, lat2, lon2) => {
   const toRad = (value) => (value * Math.PI) / 180;
-  const R = 6371;
+  const R = 3958.8;
   const dLat = toRad(lat2 - lat1);
   const dLon = toRad(lon2 - lon1);
   const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
@@ -261,9 +261,9 @@ function App() {
     if (availableTechs.length === 0) return null;
 
     return availableTechs.reduce((nearest, tech) => {
-      const distanceKm = calculateDistanceKm(clientLat, clientLng, tech.lat, tech.lng);
-      if (!nearest || distanceKm < nearest.distanceKm) {
-        return { ...tech, distanceKm };
+      const distanceMiles = calculateDistanceMiles(clientLat, clientLng, tech.lat, tech.lng);
+      if (!nearest || distanceMiles < nearest.distanceMiles) {
+        return { ...tech, distanceMiles };
       }
       return nearest;
     }, null);
@@ -302,6 +302,7 @@ function App() {
         status: nearest ? 'Dispatched' : 'Pending',
         assignedTechName: nearest?.name || '',
         assignedTechEmail: nearest?.email || '',
+        assignedTechDistanceMiles: nearest?.distanceMiles || null,
         assignedTechDistanceKm: nearest?.distanceKm || null,
         consumables: [],
         beforePhotoUrl: '',
@@ -418,14 +419,15 @@ function App() {
 
     try {
       const jobRef = doc(db, 'jobs', job.id);
-      const distanceKm = job.lat != null && job.lng != null && tech.lat != null && tech.lng != null
-        ? calculateDistanceKm(job.lat, job.lng, tech.lat, tech.lng)
+      const distanceMiles = job.lat != null && job.lng != null && tech.lat != null && tech.lng != null
+        ? calculateDistanceMiles(job.lat, job.lng, tech.lat, tech.lng)
         : null;
 
       await updateDoc(jobRef, {
         assignedTechName: tech.name,
         assignedTechEmail: tech.email,
-        assignedTechDistanceKm: distanceKm,
+        assignedTechDistanceMiles: distanceMiles,
+        assignedTechDistanceKm: distanceMiles,
         status: 'Dispatched',
       });
 
@@ -738,7 +740,9 @@ function App() {
                       <div className="space-y-2 text-right">
                         <div className="text-slate-400 text-sm">Assigned tech</div>
                         <div className="font-semibold">{job.assignedTechName || 'Unassigned'}</div>
-                        {job.assignedTechDistanceKm != null && <div className="text-slate-400 text-sm">{job.assignedTechDistanceKm.toFixed(1)} km away</div>}
+                        {(job.assignedTechDistanceMiles ?? job.assignedTechDistanceKm) != null && (
+                          <div className="text-slate-400 text-sm">{(job.assignedTechDistanceMiles ?? job.assignedTechDistanceKm).toFixed(1)} mi away</div>
+                        )}
                         <div className="text-slate-400 text-sm mt-3">Created</div>
                         <div className="text-slate-200 text-sm">{formatDate(job.createdAt)}</div>
                       </div>
@@ -755,7 +759,7 @@ function App() {
                             ) : (
                               <div className="rounded-2xl border border-dashed border-slate-700 p-8 text-center text-slate-500">Missing</div>
                             )}
-                            {profile.role === 'tech' && (
+                            {['tech', 'admin'].includes(profile.role) && (
                               <label htmlFor={`before-${job.id}`} className="mt-3 inline-flex cursor-pointer items-center gap-2 rounded-2xl border border-slate-600 bg-slate-800 px-4 py-2 text-sm text-slate-200 hover:bg-slate-700 transition">
                                 <Camera size={16} /> Upload before
                               </label>
@@ -769,7 +773,7 @@ function App() {
                             ) : (
                               <div className="rounded-2xl border border-dashed border-slate-700 p-8 text-center text-slate-500">Missing</div>
                             )}
-                            {profile.role === 'tech' && (
+                            {['tech', 'admin'].includes(profile.role) && (
                               <label htmlFor={`after-${job.id}`} className="mt-3 inline-flex cursor-pointer items-center gap-2 rounded-2xl border border-slate-600 bg-slate-800 px-4 py-2 text-sm text-slate-200 hover:bg-slate-700 transition">
                                 <Camera size={16} /> Upload after
                               </label>
@@ -807,7 +811,7 @@ function App() {
                             </div>
                           )}
                         </div>
-                        {profile.role === 'tech' && (
+                        {['tech', 'admin'].includes(profile.role) && (
                           <div className="mt-4 space-y-3">
                             <input
                               value={newConsumable.description}
@@ -854,9 +858,9 @@ function App() {
                             </div>
                           </div>
                         )}
-                        {profile.role === 'admin' && (job.status === 'Pending' || !job.assignedTechName) && (
+                        {profile.role === 'admin' && job.status !== 'Completed' && (
                           <div className="mt-4 rounded-2xl bg-slate-950/80 border border-slate-700 p-4">
-                            <div className="text-slate-400 text-sm mb-3">Manual assignment</div>
+                            <div className="text-slate-400 text-sm mb-3">Assign or reassign technician</div>
                             <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
                               <select
                                 value={assignments[job.id] || ''}
@@ -875,10 +879,10 @@ function App() {
                                 onClick={() => assignTechnicianToJob(job)}
                                 className="rounded-2xl bg-emerald-600 px-4 py-3 text-sm font-semibold text-white hover:bg-emerald-500 transition"
                               >
-                                Assign technician
+                                Assign / Reassign
                               </button>
                             </div>
-                            <div className="text-slate-500 text-xs mt-2">Use this if auto-assignment did not assign the job.</div>
+                            <div className="text-slate-500 text-xs mt-2">Use this to assign or reassign the job when auto-dispatch does not match the field requirements.</div>
                           </div>
                         )}
                       </div>
