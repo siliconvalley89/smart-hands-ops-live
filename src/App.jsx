@@ -1,7 +1,8 @@
 ﻿import React, { useState, useEffect } from 'react';
-import { db, storage } from './firebase';
-import { collection, onSnapshot, addDoc, query, orderBy, deleteDoc, doc, updateDoc } from 'firebase/firestore';
+import { db, storage, auth } from './firebase';
+import { collection, onSnapshot, addDoc, query, orderBy, deleteDoc, doc, updateDoc, getDocs, setDoc, where } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut as firebaseSignOut, onAuthStateChanged } from 'firebase/auth';
 import {
   Briefcase,
   Wrench,
@@ -11,25 +12,13 @@ import {
   Trash2,
   Camera,
   Loader2,
-  ShieldCheck,
   Lock,
-  User,
-  DollarSign,
+  LogOut,
   List,
   CheckCircle,
   Plus,
-  LogOut,
   FileText,
-  CheckSquare,
 } from 'lucide-react';
-
-const accessCodes = {
-  'ADMIN-2026': { id: 'admin-001', role: 'admin', name: 'Admin User', email: 'admin@siliconvalleysmarthands.com', pin: '1111' },
-  'TECH-JOHN': { id: 'tech-001', role: 'tech', name: 'John Tech', email: 'john@siliconvalleysmarthands.com', pin: '2222' },
-  'TECH-MIA': { id: 'tech-002', role: 'tech', name: 'Mia Tech', email: 'mia@siliconvalleysmarthands.com', pin: '3333' },
-  'CLIENT-ALICE': { id: 'client-001', role: 'client', name: 'Alice Client', email: 'alice@customer.com', pin: '4444' },
-  'CLIENT-BOB': { id: 'client-002', role: 'client', name: 'Bob Client', email: 'bob@customer.com', pin: '5555' },
-};
 
 const formatDate = (value) => {
   if (!value) return '';
@@ -41,18 +30,64 @@ const calcInvoiceTotal = (items = []) => {
   return items.reduce((sum, item) => sum + (Number(item.qty || 0) * Number(item.unitPrice || 0)), 0);
 };
 
+const calculateDistanceKm = (lat1, lon1, lat2, lon2) => {
+  const toRad = (value) => (value * Math.PI) / 180;
+  const R = 6371;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+};
+
 function App() {
-  const [auth, setAuth] = useState(() => {
-    const saved = localStorage.getItem('smartHandsAuth');
-    return saved ? JSON.parse(saved) : null;
-  });
-  const [loginCode, setLoginCode] = useState('');
-  const [loginPin, setLoginPin] = useState('');
+  const [authReady, setAuthReady] = useState(false);
+  const [firebaseUser, setFirebaseUser] = useState(null);
+  const [profile, setProfile] = useState(null);
+  const [initialAdminOpen, setInitialAdminOpen] = useState(false);
+  const [adminSetupAllowed, setAdminSetupAllowed] = useState(false);
+  const [adminSetup, setAdminSetup] = useState({ name: '', email: '', password: '' });
+  const [loginEmail, setLoginEmail] = useState('');
+  const [loginPassword, setLoginPassword] = useState('');
   const [loginError, setLoginError] = useState('');
   const [jobs, setJobs] = useState([]);
+  const [techs, setTechs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [uploadingId, setUploadingId] = useState(null);
+  const [requestForm, setRequestForm] = useState({ name: '', email: '', phone: '', location: '', service: '', details: '' });
+  const [requestSuccess, setRequestSuccess] = useState('');
+  const [requestError, setRequestError] = useState('');
+  const [newTech, setNewTech] = useState({ name: '', email: '', phone: '', location: '' });
+  const [techMessage, setTechMessage] = useState('');
   const [newConsumable, setNewConsumable] = useState({ description: '', qty: 1, unitPrice: '' });
+
+  useEffect(() => {
+    const authUnsub = onAuthStateChanged(auth, async (user) => {
+      setFirebaseUser(user);
+      if (user) {
+        const usersQuery = query(collection(db, 'users'), where('uid', '==', user.uid));
+        const userSnapshot = await getDocs(usersQuery);
+        if (!userSnapshot.empty) {
+          setProfile({ id: userSnapshot.docs[0].id, ...userSnapshot.docs[0].data() });
+        } else {
+          setProfile(null);
+        }
+      } else {
+        setProfile(null);
+      }
+      setAuthReady(true);
+    });
+
+    return () => authUnsub();
+  }, []);
+
+  useEffect(() => {
+    const checkUsers = async () => {
+      const snapshot = await getDocs(collection(db, 'users'));
+      setAdminSetupAllowed(snapshot.empty);
+    };
+    checkUsers();
+  }, []);
 
   useEffect(() => {
     const q = query(collection(db, 'jobs'), orderBy('createdAt', 'desc'));
@@ -64,75 +99,162 @@ function App() {
     return () => unsubscribe();
   }, []);
 
-  const login = () => {
-    const normalized = loginCode.trim().toUpperCase();
-    const pin = loginPin.trim();
-    const user = accessCodes[normalized];
-    if (!user || user.pin !== pin) {
-      setLoginError('Invalid code or PIN');
+  useEffect(() => {
+    const q = query(collection(db, 'technicians'), orderBy('name', 'asc'));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const techItems = snapshot.docs.map((docItem) => ({ id: docItem.id, ...docItem.data() }));
+      setTechs(techItems);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  const login = async () => {
+    setLoginError('');
+    try {
+      await signInWithEmailAndPassword(auth, loginEmail.trim(), loginPassword.trim());
+      setLoginEmail('');
+      setLoginPassword('');
+    } catch (error) {
+      console.error('Login failed', error);
+      setLoginError('Login failed. Check your email and password.');
+    }
+  };
+
+  const setupInitialAdmin = async () => {
+    setLoginError('');
+    if (!adminSetup.name || !adminSetup.email || !adminSetup.password) {
+      setLoginError('Please fill all admin fields.');
       return;
     }
-    setAuth(user);
-    localStorage.setItem('smartHandsAuth', JSON.stringify(user));
-    setLoginCode('');
-    setLoginPin('');
-    setLoginError('');
-  };
-
-  const logout = () => {
-    setAuth(null);
-    localStorage.removeItem('smartHandsAuth');
-  };
-
-  const handleAddJob = async () => {
-    const clientName = prompt('Client name');
-    if (!clientName) return;
-    const location = prompt('Location / address') || 'Unknown address';
-    const task = prompt('Service requested') || 'Service request';
-    const assignedTechName = prompt('Assigned tech name (leave blank for unassigned)') || 'Unassigned';
-    const assignedTechEmail = assignedTechName && assignedTechName !== 'Unassigned' ? prompt('Assigned tech email (optional)') || '' : '';
-
-    await addDoc(collection(db, 'jobs'), {
-      client: clientName,
-      clientEmail: '',
-      clientPhone: '',
-      location,
-      task,
-      details: '',
-      status: assignedTechName === 'Unassigned' ? 'Requested' : 'Dispatched',
-      assignedTechName,
-      assignedTechEmail,
-      consumables: [],
-      beforePhotoUrl: '',
-      afterPhotoUrl: '',
-      clientSignedOff: false,
-      createdAt: new Date(),
-    });
-  };
-
-  const handleDelete = async (id) => {
-    if (confirm('Delete this job?')) {
-      await deleteDoc(doc(db, 'jobs', id));
-    }
-  };
-
-  const handlePhotoUpload = async (event, jobId, type) => {
-    const file = event.target.files[0];
-    if (!file) return;
-    setUploadingId(jobId);
     try {
-      const storageRef = ref(storage, `job-photos/${jobId}-${type}-${Date.now()}`);
-      await uploadBytes(storageRef, file);
-      const url = await getDownloadURL(storageRef);
-      await updateDoc(doc(db, 'jobs', jobId), { [`${type}PhotoUrl`]: url });
+      const result = await createUserWithEmailAndPassword(auth, adminSetup.email.trim(), adminSetup.password.trim());
+      const user = result.user;
+      await setDoc(doc(db, 'users', user.uid), {
+        uid: user.uid,
+        displayName: adminSetup.name,
+        email: adminSetup.email.trim(),
+        role: 'admin',
+      });
+      setAdminSetup({ name: '', email: '', password: '' });
+      setAdminSetupAllowed(false);
+      setInitialAdminOpen(false);
     } catch (error) {
-      console.error('Upload failed', error);
-      alert('Upload failed.');
+      console.error('Admin setup failed', error);
+      setLoginError('Could not create admin account.');
     }
-    setUploadingId(null);
   };
 
-  const handleAddConsumable = async (job) => {
+  const logout = async () => {
+    await firebaseSignOut(auth);
+    setProfile(null);
+    setFirebaseUser(null);
+  };
+
+  const geocodeAddress = async (address) => {
+    const response = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(address)}&limit=1`);
+    const results = await response.json();
+    if (!results || results.length === 0) {
+      throw new Error('Unable to locate that address.');
+    }
+    const location = results[0];
+    return {
+      lat: Number(location.lat),
+      lng: Number(location.lon),
+      displayName: location.display_name,
+    };
+  };
+
+  const findNearestTechnician = (clientLat, clientLng) => {
+    const availableTechs = techs.filter((tech) => tech.status === 'available' && tech.lat != null && tech.lng != null);
+    if (availableTechs.length === 0) return null;
+
+    return availableTechs.reduce((nearest, tech) => {
+      const distanceKm = calculateDistanceKm(clientLat, clientLng, tech.lat, tech.lng);
+      if (!nearest || distanceKm < nearest.distanceKm) {
+        return { ...tech, distanceKm };
+      }
+      return nearest;
+    }, null);
+  };
+
+  const assignNearestTechnician = async (clientLat, clientLng) => {
+    const nearest = findNearestTechnician(clientLat, clientLng);
+    if (!nearest) return null;
+    await updateDoc(doc(db, 'technicians', nearest.id), { status: 'busy', lastAssignedAt: new Date() });
+    return nearest;
+  };
+
+  const submitRequest = async (event) => {
+    event.preventDefault();
+    setRequestError('');
+    setRequestSuccess('');
+
+    if (!requestForm.name || !requestForm.email || !requestForm.phone || !requestForm.location || !requestForm.service) {
+      setRequestError('Please complete all required fields.');
+      return;
+    }
+
+    try {
+      const geo = await geocodeAddress(requestForm.location);
+      const nearest = await assignNearestTechnician(geo.lat, geo.lng);
+      await addDoc(collection(db, 'jobs'), {
+        client: requestForm.name,
+        clientEmail: requestForm.email,
+        clientPhone: requestForm.phone,
+        location: geo.displayName,
+        rawLocation: requestForm.location,
+        lat: geo.lat,
+        lng: geo.lng,
+        task: requestForm.service,
+        details: requestForm.details,
+        status: nearest ? 'Dispatched' : 'Pending',
+        assignedTechName: nearest?.name || '',
+        assignedTechEmail: nearest?.email || '',
+        assignedTechDistanceKm: nearest?.distanceKm || null,
+        consumables: [],
+        beforePhotoUrl: '',
+        afterPhotoUrl: '',
+        clientSignedOff: false,
+        createdAt: new Date(),
+      });
+      setRequestSuccess(nearest ? `Assigned to ${nearest.name}` : 'Request submitted. No available tech found yet.');
+      setRequestForm({ name: '', email: '', phone: '', location: '', service: '', details: '' });
+    } catch (error) {
+      console.error('Submit request failed', error);
+      setRequestError(error.message || 'Failed to submit request.');
+    }
+  };
+
+  const addTechnician = async (event) => {
+    event.preventDefault();
+    setTechMessage('');
+    if (!newTech.name || !newTech.email || !newTech.location) {
+      setTechMessage('Please enter name, email, and location.');
+      return;
+    }
+
+    try {
+      const geo = await geocodeAddress(newTech.location);
+      await addDoc(collection(db, 'technicians'), {
+        name: newTech.name,
+        email: newTech.email,
+        phone: newTech.phone,
+        location: geo.displayName,
+        rawLocation: newTech.location,
+        lat: geo.lat,
+        lng: geo.lng,
+        status: 'available',
+        createdAt: new Date(),
+      });
+      setNewTech({ name: '', email: '', phone: '', location: '' });
+      setTechMessage('Technician added and ready for dispatch.');
+    } catch (error) {
+      console.error('Add technician failed', error);
+      setTechMessage('Could not add technician. Please check the location.');
+    }
+  };
+
+  const addConsumable = async (job) => {
     if (!newConsumable.description || !newConsumable.qty) return;
     const item = {
       description: newConsumable.description,
@@ -145,7 +267,7 @@ function App() {
     setNewConsumable({ description: '', qty: 1, unitPrice: '' });
   };
 
-  const requestSignoff = async (job) => {
+  const requestClientSignoff = async (job) => {
     await updateDoc(doc(db, 'jobs', job.id), {
       status: 'Ready for Signoff',
       signoffRequestedAt: new Date(),
@@ -160,15 +282,23 @@ function App() {
     });
   };
 
-  const currentJobs = auth?.role === 'admin'
+  const currentJobs = profile?.role === 'admin'
     ? jobs
-    : auth?.role === 'tech'
-      ? jobs.filter((job) => job.assignedTechEmail === auth.email || job.assignedTechName === auth.name)
-      : jobs.filter((job) => job.clientEmail === auth.email || job.client === auth.name);
+    : profile?.role === 'tech'
+      ? jobs.filter((job) => job.assignedTechEmail === profile.email || job.assignedTechName === profile.displayName)
+      : jobs.filter((job) => job.clientEmail === profile.email || job.client === profile.displayName);
 
+  const openRequestForm = profile?.role === 'client' ? true : false;
+  const canViewInvoice = profile?.role === 'admin' || profile?.role === 'client';
   const activeJobsCount = currentJobs.filter((job) => job.status !== 'Completed').length;
 
-  if (!auth) {
+  if (!authReady) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center">Loading…</div>
+    );
+  }
+
+  if (!firebaseUser) {
     return (
       <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center p-4">
         <div className="max-w-md w-full bg-slate-900 border border-slate-700 rounded-3xl p-8 shadow-2xl">
@@ -176,31 +306,80 @@ function App() {
             <div className="bg-blue-600 p-3 rounded-xl"><Lock size={24} /></div>
             <div>
               <h1 className="text-2xl font-bold">Smart Hands Login</h1>
-              <p className="text-slate-400 text-sm">Enter a code and PIN for admin, technician, or client access.</p>
+              <p className="text-slate-400 text-sm">Sign in with your company email and password.</p>
             </div>
           </div>
+
           <div className="space-y-4">
-            <label className="block text-slate-300 text-sm">Access Code</label>
+            <label className="block text-slate-300 text-sm">Email</label>
             <input
-              value={loginCode}
-              onChange={(e) => setLoginCode(e.target.value)}
-              placeholder="ADMIN-2026"
+              value={loginEmail}
+              onChange={(e) => setLoginEmail(e.target.value)}
+              placeholder="email@example.com"
               className="w-full rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3 text-slate-100 outline-none"
             />
-            <label className="block text-slate-300 text-sm">PIN</label>
+            <label className="block text-slate-300 text-sm">Password</label>
             <input
               type="password"
-              value={loginPin}
-              onChange={(e) => setLoginPin(e.target.value)}
-              placeholder="1234"
+              value={loginPassword}
+              onChange={(e) => setLoginPassword(e.target.value)}
+              placeholder="Password"
               className="w-full rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3 text-slate-100 outline-none"
             />
             {loginError && <div className="rounded-2xl bg-red-900/50 p-3 text-red-200">{loginError}</div>}
             <button onClick={login} className="w-full rounded-2xl bg-blue-600 px-4 py-3 text-white font-semibold hover:bg-blue-500 transition">
               Sign in
             </button>
-            <p className="text-slate-500 text-xs">This is a prototype access system. Replace with Firebase Auth for production.</p>
+            {adminSetupAllowed && !initialAdminOpen && (
+              <button onClick={() => setInitialAdminOpen(true)} className="w-full rounded-2xl border border-slate-700 px-4 py-3 text-slate-200 hover:bg-slate-800 transition">
+                Create initial admin account
+              </button>
+            )}
+            {initialAdminOpen && (
+              <div className="space-y-4">
+                <label className="block text-slate-300 text-sm">Name</label>
+                <input
+                  value={adminSetup.name}
+                  onChange={(e) => setAdminSetup((prev) => ({ ...prev, name: e.target.value }))}
+                  placeholder="Admin Name"
+                  className="w-full rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3 text-slate-100 outline-none"
+                />
+                <label className="block text-slate-300 text-sm">Email</label>
+                <input
+                  value={adminSetup.email}
+                  onChange={(e) => setAdminSetup((prev) => ({ ...prev, email: e.target.value }))}
+                  placeholder="admin@example.com"
+                  className="w-full rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3 text-slate-100 outline-none"
+                />
+                <label className="block text-slate-300 text-sm">Password</label>
+                <input
+                  type="password"
+                  value={adminSetup.password}
+                  onChange={(e) => setAdminSetup((prev) => ({ ...prev, password: e.target.value }))}
+                  placeholder="Create password"
+                  className="w-full rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3 text-slate-100 outline-none"
+                />
+                <button onClick={setupInitialAdmin} className="w-full rounded-2xl bg-emerald-600 px-4 py-3 text-white font-semibold hover:bg-emerald-500 transition">
+                  Create admin account
+                </button>
+              </div>
+            )}
           </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (!profile) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center p-4">
+        <div className="max-w-lg w-full bg-slate-900 border border-slate-700 rounded-3xl p-8 shadow-2xl text-center">
+          <h1 className="text-2xl font-bold">Account not set up yet</h1>
+          <p className="text-slate-400 mt-4">Your Firebase user exists, but no role profile was found.</p>
+          <p className="text-slate-400 mt-2">Create a record in the Firestore `users` collection with your UID, displayName, email, and role.</p>
+          <button onClick={logout} className="mt-6 rounded-2xl bg-blue-600 px-4 py-3 text-white font-semibold hover:bg-blue-500 transition">
+            Sign out
+          </button>
         </div>
       </div>
     );
@@ -213,7 +392,7 @@ function App() {
           <div className="flex items-center gap-3">
             <div className="bg-blue-600 p-2 rounded-lg"><Briefcase size={24} className="text-white" /></div>
             <div>
-              <div className="text-slate-400 text-sm">Signed in as {auth.name}</div>
+              <div className="text-slate-400 text-sm">Signed in as {profile.displayName}</div>
               <h1 className="text-xl font-bold">Smart Hands Dispatch</h1>
             </div>
           </div>
@@ -226,44 +405,147 @@ function App() {
       <main className="max-w-6xl mx-auto p-4 space-y-6">
         <section className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div className="bg-slate-800 rounded-3xl border border-slate-700 p-5">
-            <div className="flex items-center gap-3 text-slate-400 uppercase tracking-[0.2em] text-xs">Jobs</div>
-            <div className="mt-4 text-4xl font-bold">{currentJobs.length}</div>
-            <div className="mt-2 text-slate-400">Jobs visible to your role</div>
-          </div>
-          <div className="bg-slate-800 rounded-3xl border border-slate-700 p-5">
-            <div className="flex items-center gap-3 text-slate-400 uppercase tracking-[0.2em] text-xs">Active</div>
-            <div className="mt-4 text-4xl font-bold">{activeJobsCount}</div>
-            <div className="mt-2 text-slate-400">Open or awaiting signoff</div>
-          </div>
-          <div className="bg-slate-800 rounded-3xl border border-slate-700 p-5">
             <div className="flex items-center gap-3 text-slate-400 uppercase tracking-[0.2em] text-xs">Role</div>
-            <div className="mt-4 text-4xl font-bold">{auth.role}</div>
-            <div className="mt-2 text-slate-400">{auth.role === 'admin' ? 'Admin access' : auth.role === 'tech' ? 'Technician access' : 'Client access'}</div>
+            <div className="mt-4 text-4xl font-bold capitalize">{profile.role}</div>
+            <div className="mt-2 text-slate-400">Platform access level</div>
+          </div>
+          <div className="bg-slate-800 rounded-3xl border border-slate-700 p-5">
+            <div className="flex items-center gap-3 text-slate-400 uppercase tracking-[0.2em] text-xs">Visible jobs</div>
+            <div className="mt-4 text-4xl font-bold">{currentJobs.length}</div>
+            <div className="mt-2 text-slate-400">Jobs available to you</div>
+          </div>
+          <div className="bg-slate-800 rounded-3xl border border-slate-700 p-5">
+            <div className="flex items-center gap-3 text-slate-400 uppercase tracking-[0.2em] text-xs">Open jobs</div>
+            <div className="mt-4 text-4xl font-bold">{activeJobsCount}</div>
+            <div className="mt-2 text-slate-400">Not yet completed</div>
           </div>
         </section>
 
-        {auth.role === 'admin' && (
-          <div className="flex flex-col gap-4 lg:flex-row">
-            <button onClick={handleAddJob} className="rounded-3xl bg-blue-600 px-6 py-3 text-white font-semibold hover:bg-blue-500 transition flex items-center gap-2">
-              <Calendar size={18} /> Add manual request
-            </button>
-          </div>
+        {(profile.role === 'admin' || profile.role === 'client') && (
+          <section className="bg-slate-800 rounded-3xl border border-slate-700 p-5">
+            <div className="flex items-center gap-3 mb-4 text-lg font-semibold"><Calendar size={20} /> {profile.role === 'client' ? 'Request service' : 'Client request form'}</div>
+            <form onSubmit={submitRequest} className="grid gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <label className="block">
+                  <span className="text-slate-300 text-sm">Name</span>
+                  <input
+                    value={requestForm.name}
+                    onChange={(e) => setRequestForm((prev) => ({ ...prev, name: e.target.value }))}
+                    placeholder="Client name"
+                    className="mt-2 w-full rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3 text-slate-100"
+                  />
+                </label>
+                <label className="block">
+                  <span className="text-slate-300 text-sm">Email</span>
+                  <input
+                    value={requestForm.email}
+                    onChange={(e) => setRequestForm((prev) => ({ ...prev, email: e.target.value }))}
+                    placeholder="client@example.com"
+                    className="mt-2 w-full rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3 text-slate-100"
+                  />
+                </label>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <label className="block">
+                  <span className="text-slate-300 text-sm">Phone</span>
+                  <input
+                    value={requestForm.phone}
+                    onChange={(e) => setRequestForm((prev) => ({ ...prev, phone: e.target.value }))}
+                    placeholder="(408) 409-8115"
+                    className="mt-2 w-full rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3 text-slate-100"
+                  />
+                </label>
+                <label className="block">
+                  <span className="text-slate-300 text-sm">Location</span>
+                  <input
+                    value={requestForm.location}
+                    onChange={(e) => setRequestForm((prev) => ({ ...prev, location: e.target.value }))}
+                    placeholder="123 Main St, San Jose, CA"
+                    className="mt-2 w-full rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3 text-slate-100"
+                  />
+                </label>
+              </div>
+              <label className="block">
+                <span className="text-slate-300 text-sm">Service requested</span>
+                <input
+                  value={requestForm.service}
+                  onChange={(e) => setRequestForm((prev) => ({ ...prev, service: e.target.value }))}
+                  placeholder="Network repair, server install, etc."
+                  className="mt-2 w-full rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3 text-slate-100"
+                />
+              </label>
+              <label className="block">
+                <span className="text-slate-300 text-sm">Details</span>
+                <textarea
+                  value={requestForm.details}
+                  onChange={(e) => setRequestForm((prev) => ({ ...prev, details: e.target.value }))}
+                  rows={3}
+                  placeholder="Describe the issue or service request"
+                  className="mt-2 w-full rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3 text-slate-100"
+                />
+              </label>
+              {requestError && <div className="rounded-2xl bg-red-900/50 p-3 text-red-200">{requestError}</div>}
+              {requestSuccess && <div className="rounded-2xl bg-emerald-900/50 p-3 text-emerald-200">{requestSuccess}</div>}
+              <button type="submit" className="rounded-2xl bg-blue-600 px-5 py-3 text-white font-semibold hover:bg-blue-500 transition">
+                Submit request
+              </button>
+            </form>
+          </section>
+        )}
+
+        {profile.role === 'admin' && (
+          <section className="bg-slate-800 rounded-3xl border border-slate-700 p-5">
+            <div className="flex items-center gap-3 mb-4 text-lg font-semibold"><Wrench size={20} /> Add technician</div>
+            <form onSubmit={addTechnician} className="grid gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <input
+                  value={newTech.name}
+                  onChange={(e) => setNewTech((prev) => ({ ...prev, name: e.target.value }))}
+                  placeholder="Technician name"
+                  className="w-full rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3 text-slate-100"
+                />
+                <input
+                  value={newTech.email}
+                  onChange={(e) => setNewTech((prev) => ({ ...prev, email: e.target.value }))}
+                  placeholder="technician@example.com"
+                  className="w-full rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3 text-slate-100"
+                />
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <input
+                  value={newTech.phone}
+                  onChange={(e) => setNewTech((prev) => ({ ...prev, phone: e.target.value }))}
+                  placeholder="Phone number"
+                  className="w-full rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3 text-slate-100"
+                />
+                <input
+                  value={newTech.location}
+                  onChange={(e) => setNewTech((prev) => ({ ...prev, location: e.target.value }))}
+                  placeholder="Technician base location"
+                  className="w-full rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3 text-slate-100"
+                />
+              </div>
+              {techMessage && <div className="rounded-2xl bg-blue-900/50 p-3 text-blue-200">{techMessage}</div>}
+              <button type="submit" className="rounded-2xl bg-emerald-600 px-5 py-3 text-white font-semibold hover:bg-emerald-500 transition flex items-center justify-center gap-2">
+                <Plus size={16} /> Add tech
+              </button>
+            </form>
+          </section>
         )}
 
         <section className="grid gap-6">
           {loading ? (
             <div className="rounded-3xl bg-slate-950/70 p-8 text-center text-slate-400">Loading jobs…</div>
           ) : currentJobs.length === 0 ? (
-            <div className="rounded-3xl bg-slate-950/70 p-8 text-center text-slate-400">No jobs found for your role yet.</div>
+            <div className="rounded-3xl bg-slate-950/70 p-8 text-center text-slate-400">No jobs found.</div>
           ) : (
             <div className="space-y-6">
               {currentJobs.map((job) => {
-                const canViewInvoice = auth.role === 'admin' || auth.role === 'client';
                 const total = calcInvoiceTotal(job.consumables || []);
-                const beforeUploaded = Boolean(job.beforePhotoUrl);
-                const afterUploaded = Boolean(job.afterPhotoUrl);
-                const canRequestSignoff = auth.role === 'tech' && job.status === 'In Progress' && beforeUploaded && afterUploaded;
-                const canClientSignoff = auth.role === 'client' && job.status === 'Ready for Signoff' && !job.clientSignedOff;
+                const beforeReady = Boolean(job.beforePhotoUrl);
+                const afterReady = Boolean(job.afterPhotoUrl);
+                const canRequestSignoff = profile.role === 'tech' && job.status === 'Dispatched' && beforeReady && afterReady;
+                const canClientSignoff = profile.role === 'client' && job.status === 'Ready for Signoff' && !job.clientSignedOff;
 
                 return (
                   <div key={job.id} className="bg-slate-800 rounded-3xl border border-slate-700 p-5">
@@ -282,6 +564,7 @@ function App() {
                       <div className="space-y-2 text-right">
                         <div className="text-slate-400 text-sm">Assigned tech</div>
                         <div className="font-semibold">{job.assignedTechName || 'Unassigned'}</div>
+                        {job.assignedTechDistanceKm != null && <div className="text-slate-400 text-sm">{job.assignedTechDistanceKm.toFixed(1)} km away</div>}
                         <div className="text-slate-400 text-sm mt-3">Created</div>
                         <div className="text-slate-200 text-sm">{formatDate(job.createdAt)}</div>
                       </div>
@@ -298,7 +581,7 @@ function App() {
                             ) : (
                               <div className="rounded-2xl border border-dashed border-slate-700 p-8 text-center text-slate-500">Missing</div>
                             )}
-                            {auth.role === 'tech' && (
+                            {profile.role === 'tech' && (
                               <label htmlFor={`before-${job.id}`} className="mt-3 inline-flex cursor-pointer items-center gap-2 rounded-2xl border border-slate-600 bg-slate-800 px-4 py-2 text-sm text-slate-200 hover:bg-slate-700 transition">
                                 <Camera size={16} /> Upload before
                               </label>
@@ -312,7 +595,7 @@ function App() {
                             ) : (
                               <div className="rounded-2xl border border-dashed border-slate-700 p-8 text-center text-slate-500">Missing</div>
                             )}
-                            {auth.role === 'tech' && (
+                            {profile.role === 'tech' && (
                               <label htmlFor={`after-${job.id}`} className="mt-3 inline-flex cursor-pointer items-center gap-2 rounded-2xl border border-slate-600 bg-slate-800 px-4 py-2 text-sm text-slate-200 hover:bg-slate-700 transition">
                                 <Camera size={16} /> Upload after
                               </label>
@@ -350,7 +633,7 @@ function App() {
                             </div>
                           )}
                         </div>
-                        {auth.role === 'tech' && (
+                        {profile.role === 'tech' && (
                           <div className="mt-4 space-y-3">
                             <input
                               value={newConsumable.description}
@@ -376,7 +659,7 @@ function App() {
                                 className="rounded-2xl border border-slate-700 bg-slate-900 px-4 py-3 text-slate-100"
                               />
                             </div>
-                            <button onClick={() => handleAddConsumable(job)} className="w-full rounded-2xl bg-blue-600 px-4 py-3 text-white font-semibold hover:bg-blue-500 transition flex items-center justify-center gap-2">
+                            <button onClick={() => addConsumable(job)} className="w-full rounded-2xl bg-blue-600 px-4 py-3 text-white font-semibold hover:bg-blue-500 transition flex items-center justify-center gap-2">
                               <Plus size={16} /> Add consumable
                             </button>
                           </div>
@@ -387,7 +670,7 @@ function App() {
                               <span>Total</span>
                               <span className="font-semibold text-slate-100">${total.toFixed(2)}</span>
                             </div>
-                            <div className="text-slate-500 text-xs">Only admin and client can see amounts.</div>
+                            <div className="text-slate-500 text-xs">Only admin and client see invoice amounts.</div>
                           </div>
                         )}
                       </div>
@@ -400,20 +683,20 @@ function App() {
                         {job.clientSignedOff && <div className="text-emerald-300">Client signed off</div>}
                       </div>
                       <div className="flex flex-wrap gap-3">
-                        {auth.role === 'tech' && canRequestSignoff && (
-                          <button onClick={() => requestSignoff(job)} className="rounded-2xl bg-orange-500 px-4 py-2 text-sm font-semibold text-white hover:bg-orange-400 transition flex items-center gap-2">
+                        {profile.role === 'tech' && canRequestSignoff && (
+                          <button onClick={() => requestClientSignoff(job)} className="rounded-2xl bg-orange-500 px-4 py-2 text-sm font-semibold text-white hover:bg-orange-400 transition flex items-center gap-2">
                             <FileText size={16} /> Request sign-off
                           </button>
                         )}
-                        {auth.role === 'client' && canClientSignoff && (
+                        {profile.role === 'client' && canClientSignoff && (
                           <button onClick={() => handleClientSignoff(job)} className="rounded-2xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500 transition flex items-center gap-2">
                             <CheckCircle size={16} /> Sign off work
                           </button>
                         )}
-                        {auth.role === 'admin' && job.status === 'Completed' && (
+                        {profile.role === 'admin' && job.status === 'Completed' && (
                           <div className="rounded-2xl bg-emerald-500/10 px-4 py-2 text-sm text-emerald-200">Closed</div>
                         )}
-                        {auth.role === 'admin' && (
+                        {profile.role === 'admin' && (
                           <button onClick={() => handleDelete(job.id)} className="rounded-2xl bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-500 transition flex items-center gap-2">
                             <Trash2 size={16} /> Delete
                           </button>
