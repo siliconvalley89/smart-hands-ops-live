@@ -1,8 +1,16 @@
 ﻿import React, { useState, useEffect } from 'react';
-import { db, storage, auth, adminAuth } from './firebase';
+import { db, storage, auth } from './firebase';
 import { collection, onSnapshot, addDoc, query, orderBy, deleteDoc, doc, updateDoc, getDocs, setDoc, where } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-import { createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut as firebaseSignOut, onAuthStateChanged } from 'firebase/auth';
+import {
+  createUserWithEmailAndPassword,
+  signInWithEmailAndPassword,
+  signOut as firebaseSignOut,
+  onAuthStateChanged,
+  EmailAuthProvider,
+  reauthenticateWithCredential,
+  updatePassword,
+} from 'firebase/auth';
 import { jsPDF } from 'jspdf';
 import logoPath from './assets/logo.jpg';
 import {
@@ -139,8 +147,11 @@ function App() {
   const [consumableEdits, setConsumableEdits] = useState({});
   const [newAccount, setNewAccount] = useState({ name: '', email: '', password: '', role: 'tech', phone: '', location: '', adminPassword: '' });
   const [accountMessage, setAccountMessage] = useState('');
+  const [passwordForm, setPasswordForm] = useState({ current: '', next: '', confirm: '' });
+  const [passwordMessage, setPasswordMessage] = useState('');
   const [assignments, setAssignments] = useState({});
   const [users, setUsers] = useState([]);
+  const [userRoleEdits, setUserRoleEdits] = useState({});
 
   useEffect(() => {
     const authUnsub = onAuthStateChanged(auth, async (user) => {
@@ -428,7 +439,74 @@ function App() {
     }
   };
 
+  const changeMyPassword = async () => {
+    setPasswordMessage('');
+    if (!passwordForm.current || !passwordForm.next || !passwordForm.confirm) {
+      setPasswordMessage('Please fill current and new password fields.');
+      return;
+    }
+    if (passwordForm.next !== passwordForm.confirm) {
+      setPasswordMessage('New password and confirmation do not match.');
+      return;
+    }
+    if (passwordForm.next.length < 6) {
+      setPasswordMessage('New password must be at least 6 characters.');
+      return;
+    }
+
+    try {
+      const currentUser = auth.currentUser;
+      if (!currentUser?.email) {
+        setPasswordMessage('No signed-in user was found. Please sign in again.');
+        return;
+      }
+      const credential = EmailAuthProvider.credential(currentUser.email, passwordForm.current);
+      await reauthenticateWithCredential(currentUser, credential);
+      await updatePassword(currentUser, passwordForm.next);
+      setPasswordForm({ current: '', next: '', confirm: '' });
+      setPasswordMessage('Password updated successfully.');
+    } catch (error) {
+      console.error('Password update failed', error);
+      setPasswordMessage('Unable to update password. Verify your current password and try again.');
+    }
+  };
+
+  const updateUserRole = async (userItem) => {
+    const nextRole = userRoleEdits[userItem.id] || userItem.role;
+    if (!nextRole || nextRole === userItem.role) return;
+
+    try {
+      await updateDoc(doc(db, 'users', userItem.id), { role: nextRole });
+
+      if (userItem.role === 'tech' && nextRole !== 'tech') {
+        await deleteDoc(doc(db, 'technicians', userItem.id));
+      }
+
+      if (userItem.role !== 'tech' && nextRole === 'tech') {
+        await setDoc(doc(db, 'technicians', userItem.id), {
+          uid: userItem.uid || userItem.id,
+          name: userItem.displayName || userItem.email,
+          email: userItem.email,
+          phone: '',
+          location: '',
+          rawLocation: '',
+          status: 'available',
+          createdAt: new Date(),
+        }, { merge: true });
+      }
+
+      setAccountMessage(`Updated role for ${userItem.displayName || userItem.email}.`);
+    } catch (error) {
+      console.error('Update user role failed', error);
+      setAccountMessage('Unable to update user role.');
+    }
+  };
+
   const deleteUser = async (userId, userRole) => {
+    if (userId === (profile?.uid || profile?.id)) {
+      setAccountMessage('You cannot delete your own admin account from this panel.');
+      return;
+    }
     if (!window.confirm('Are you sure you want to delete this user? This action cannot be undone.')) {
       return;
     }
@@ -769,6 +847,40 @@ function App() {
           </div>
         </section>
 
+        <section className="rounded-3xl bg-slate-950/60 border border-slate-700 p-6 grid gap-6">
+          <div>
+            <h2 className="text-xl font-semibold text-white">Change password</h2>
+            <p className="text-slate-400 mt-1">Users can replace the temporary password on first login from here.</p>
+          </div>
+          <div className="grid gap-4 md:grid-cols-3">
+            <input
+              type="password"
+              value={passwordForm.current}
+              onChange={(e) => setPasswordForm((prev) => ({ ...prev, current: e.target.value }))}
+              placeholder="Current password"
+              className="w-full rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3 text-slate-100"
+            />
+            <input
+              type="password"
+              value={passwordForm.next}
+              onChange={(e) => setPasswordForm((prev) => ({ ...prev, next: e.target.value }))}
+              placeholder="New password"
+              className="w-full rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3 text-slate-100"
+            />
+            <input
+              type="password"
+              value={passwordForm.confirm}
+              onChange={(e) => setPasswordForm((prev) => ({ ...prev, confirm: e.target.value }))}
+              placeholder="Confirm new password"
+              className="w-full rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3 text-slate-100"
+            />
+          </div>
+          {passwordMessage && <div className="rounded-2xl bg-blue-900/50 p-3 text-blue-200">{passwordMessage}</div>}
+          <button onClick={changeMyPassword} type="button" className="rounded-2xl bg-amber-600 px-5 py-3 text-white font-semibold hover:bg-amber-500 transition flex items-center justify-center gap-2">
+            <Lock size={16} /> Update my password
+          </button>
+        </section>
+
         {(profile.role === 'admin' || profile.role === 'client') && (
           <section className="bg-slate-800 rounded-3xl border border-slate-700 p-5">
             <div className="flex items-center gap-3 mb-4 text-lg font-semibold"><Calendar size={20} /> {profile.role === 'client' ? 'Request service' : 'Client request form'}</div>
@@ -952,6 +1064,60 @@ function App() {
             <button onClick={createAccount} type="button" className="rounded-2xl bg-indigo-600 px-5 py-3 text-white font-semibold hover:bg-indigo-500 transition flex items-center justify-center gap-2">
               <Plus size={16} /> Create account
             </button>
+          </section>
+
+          <section className="rounded-3xl bg-slate-950/60 border border-slate-700 p-6 grid gap-4">
+            <div>
+              <h2 className="text-xl font-semibold text-white">Existing users</h2>
+              <p className="text-slate-400 mt-1">Manage role assignments and remove users from app access.</p>
+            </div>
+
+            {users.length === 0 ? (
+              <div className="rounded-2xl bg-slate-900 p-4 text-slate-400">No users found.</div>
+            ) : (
+              <div className="space-y-3">
+                {users.map((userItem) => (
+                  <div key={userItem.id} className="rounded-2xl border border-slate-700 bg-slate-900 p-4">
+                    <div className="grid gap-3 md:grid-cols-[1.5fr_1.2fr_auto_auto] md:items-center">
+                      <div>
+                        <div className="font-semibold text-slate-100">{userItem.displayName || 'Unnamed user'}</div>
+                        <div className="text-slate-400 text-sm">{userItem.email || 'No email'}</div>
+                        <div className="text-slate-500 text-xs mt-1">UID: {userItem.uid || userItem.id}</div>
+                      </div>
+
+                      <select
+                        value={userRoleEdits[userItem.id] || userItem.role || 'client'}
+                        onChange={(e) => setUserRoleEdits((prev) => ({ ...prev, [userItem.id]: e.target.value }))}
+                        disabled={userItem.id === (profile?.uid || profile?.id)}
+                        className="w-full rounded-2xl border border-slate-700 bg-slate-950 px-4 py-2 text-slate-100"
+                      >
+                        <option value="admin">Admin</option>
+                        <option value="tech">Technician</option>
+                        <option value="client">Client</option>
+                      </select>
+
+                      <button
+                        type="button"
+                        onClick={() => updateUserRole(userItem)}
+                        disabled={userItem.id === (profile?.uid || profile?.id)}
+                        className="rounded-2xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        Save role
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => deleteUser(userItem.id, userItem.role)}
+                        disabled={userItem.id === (profile?.uid || profile?.id)}
+                        className="rounded-2xl bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </section>
           </>
         )}
