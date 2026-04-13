@@ -149,6 +149,7 @@ function App() {
   const [accountMessage, setAccountMessage] = useState('');
   const [passwordForm, setPasswordForm] = useState({ current: '', next: '', confirm: '' });
   const [passwordMessage, setPasswordMessage] = useState('');
+  const [passwordSectionHidden, setPasswordSectionHidden] = useState(false);
   const [assignments, setAssignments] = useState({});
   const [users, setUsers] = useState([]);
   const [userRoleEdits, setUserRoleEdits] = useState({});
@@ -401,9 +402,10 @@ function App() {
       setAccountMessage('Please enter a base location for technician accounts.');
       return;
     }
+    const adminEmail = profile?.email;
+    const adminPassword = newAccount.adminPassword;
+
     try {
-      const adminEmail = profile?.email;
-      const adminPassword = newAccount.adminPassword;
       const result = await createUserWithEmailAndPassword(auth, newAccount.email.trim(), newAccount.password.trim());
       const user = result.user;
       await setDoc(doc(db, 'users', user.uid), {
@@ -435,6 +437,14 @@ function App() {
       setNewAccount({ name: '', email: '', password: '', role: 'tech', phone: '', location: '', adminPassword: '' });
     } catch (error) {
       console.error('Create account failed', error);
+      try {
+        await firebaseSignOut(auth);
+        if (adminEmail && adminPassword) {
+          await signInWithEmailAndPassword(auth, adminEmail, adminPassword);
+        }
+      } catch (recoveryError) {
+        console.error('Admin session recovery failed', recoveryError);
+      }
       setAccountMessage(error.message || 'Unable to create account.');
     }
   };
@@ -465,6 +475,7 @@ function App() {
       await updatePassword(currentUser, passwordForm.next);
       setPasswordForm({ current: '', next: '', confirm: '' });
       setPasswordMessage('Password updated successfully.');
+      setPasswordSectionHidden(true);
     } catch (error) {
       console.error('Password update failed', error);
       setPasswordMessage('Unable to update password. Verify your current password and try again.');
@@ -847,39 +858,41 @@ function App() {
           </div>
         </section>
 
-        <section className="rounded-3xl bg-slate-950/60 border border-slate-700 p-6 grid gap-6">
-          <div>
-            <h2 className="text-xl font-semibold text-white">Change password</h2>
-            <p className="text-slate-400 mt-1">Users can replace the temporary password on first login from here.</p>
-          </div>
-          <div className="grid gap-4 md:grid-cols-3">
-            <input
-              type="password"
-              value={passwordForm.current}
-              onChange={(e) => setPasswordForm((prev) => ({ ...prev, current: e.target.value }))}
-              placeholder="Current password"
-              className="w-full rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3 text-slate-100"
-            />
-            <input
-              type="password"
-              value={passwordForm.next}
-              onChange={(e) => setPasswordForm((prev) => ({ ...prev, next: e.target.value }))}
-              placeholder="New password"
-              className="w-full rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3 text-slate-100"
-            />
-            <input
-              type="password"
-              value={passwordForm.confirm}
-              onChange={(e) => setPasswordForm((prev) => ({ ...prev, confirm: e.target.value }))}
-              placeholder="Confirm new password"
-              className="w-full rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3 text-slate-100"
-            />
-          </div>
-          {passwordMessage && <div className="rounded-2xl bg-blue-900/50 p-3 text-blue-200">{passwordMessage}</div>}
-          <button onClick={changeMyPassword} type="button" className="rounded-2xl bg-amber-600 px-5 py-3 text-white font-semibold hover:bg-amber-500 transition flex items-center justify-center gap-2">
-            <Lock size={16} /> Update my password
-          </button>
-        </section>
+        {!passwordSectionHidden && (
+          <section className="rounded-3xl bg-slate-950/60 border border-slate-700 p-6 grid gap-6">
+            <div>
+              <h2 className="text-xl font-semibold text-white">Change password</h2>
+              <p className="text-slate-400 mt-1">Users can replace the temporary password on first login from here.</p>
+            </div>
+            <div className="grid gap-4 md:grid-cols-3">
+              <input
+                type="password"
+                value={passwordForm.current}
+                onChange={(e) => setPasswordForm((prev) => ({ ...prev, current: e.target.value }))}
+                placeholder="Current password"
+                className="w-full rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3 text-slate-100"
+              />
+              <input
+                type="password"
+                value={passwordForm.next}
+                onChange={(e) => setPasswordForm((prev) => ({ ...prev, next: e.target.value }))}
+                placeholder="New password"
+                className="w-full rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3 text-slate-100"
+              />
+              <input
+                type="password"
+                value={passwordForm.confirm}
+                onChange={(e) => setPasswordForm((prev) => ({ ...prev, confirm: e.target.value }))}
+                placeholder="Confirm new password"
+                className="w-full rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3 text-slate-100"
+              />
+            </div>
+            {passwordMessage && <div className="rounded-2xl bg-blue-900/50 p-3 text-blue-200">{passwordMessage}</div>}
+            <button onClick={changeMyPassword} type="button" className="rounded-2xl bg-amber-600 px-5 py-3 text-white font-semibold hover:bg-amber-500 transition flex items-center justify-center gap-2">
+              <Lock size={16} /> Update my password
+            </button>
+          </section>
+        )}
 
         {(profile.role === 'admin' || profile.role === 'client') && (
           <section className="bg-slate-800 rounded-3xl border border-slate-700 p-5">

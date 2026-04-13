@@ -23,13 +23,27 @@ service cloud.firestore {
 
     match /users/{userId} {
       allow read: if isSignedIn() && (request.auth.uid == userId || isAdmin());
-      allow create: if isSignedIn() && isAdmin();
+      allow create: if isSignedIn() && (
+        isAdmin() ||
+        (
+          request.auth.uid == userId &&
+          request.resource.data.uid == request.auth.uid &&
+          request.resource.data.email == request.auth.token.email &&
+          request.resource.data.role in ['tech', 'client']
+        )
+      );
       allow update, delete: if isAdmin();
     }
 
     match /technicians/{techId} {
       allow read: if isSignedIn();
-      allow create, update, delete: if isAdmin();
+      allow create: if isAdmin() || (
+        isTech() &&
+        request.auth.uid == techId &&
+        request.resource.data.uid == request.auth.uid &&
+        request.resource.data.email == request.auth.token.email
+      );
+      allow update, delete: if isAdmin();
     }
 
     match /jobs/{jobId} {
