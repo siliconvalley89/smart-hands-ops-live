@@ -152,7 +152,28 @@ function App() {
       setInitialAdminOpen(false);
     } catch (error) {
       console.error('Admin setup failed', error);
-      setLoginError('Could not create admin account.');
+      let message = 'Could not create admin account.';
+      if (error?.code) {
+        switch (error.code) {
+          case 'auth/email-already-in-use':
+            message = 'This email is already in use.';
+            break;
+          case 'auth/invalid-email':
+            message = 'Invalid email address.';
+            break;
+          case 'auth/weak-password':
+            message = 'Password too weak. Use at least 6 characters.';
+            break;
+          case 'auth/operation-not-allowed':
+            message = 'Email/password sign-in is disabled in Firebase Auth. Enable it in the Firebase console.';
+            break;
+          default:
+            message = error.message || message;
+        }
+      } else if (error?.message) {
+        message = error.message;
+      }
+      setLoginError(message);
     }
   };
 
