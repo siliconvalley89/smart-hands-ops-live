@@ -32,7 +32,11 @@ service cloud.firestore {
           request.resource.data.role in ['tech', 'client']
         )
       );
-      allow update, delete: if isAdmin();
+      // Admins can do full updates; users can update only their own fcmToken field
+      allow update: if isAdmin() ||
+        (isSignedIn() && request.auth.uid == userId &&
+         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['fcmToken']));
+      allow delete: if isAdmin();
     }
 
     match /technicians/{techId} {

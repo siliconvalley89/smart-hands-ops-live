@@ -1,7 +1,8 @@
 ﻿import React, { useState, useEffect } from 'react';
-import { db, storage, auth } from './firebase';
+import { db, storage, auth, messaging, VAPID_KEY } from './firebase';
 import { collection, onSnapshot, addDoc, query, orderBy, deleteDoc, doc, updateDoc, getDocs, getDoc, setDoc, where } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { getToken } from 'firebase/messaging';
 import {
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
@@ -137,7 +138,7 @@ function App() {
   const [techs, setTechs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [uploadingId, setUploadingId] = useState(null);
-  const [requestForm, setRequestForm] = useState({ name: '', email: '', phone: '', location: '', service: '', details: '' });
+  const [requestForm, setRequestForm] = useState({ name: '', email: '', phone: '', location: '', service: '', details: '', serialNumber: '' });
   const [requestSuccess, setRequestSuccess] = useState('');
   const [requestError, setRequestError] = useState('');
   const [newTech, setNewTech] = useState({ name: '', email: '', phone: '', location: '' });
@@ -188,6 +189,27 @@ function App() {
 
     return () => authUnsub();
   }, []);
+
+  // Register this device's FCM push token whenever a tech or admin logs in
+  useEffect(() => {
+    if (!firebaseUser || !profile) return;
+    if (profile.role !== 'tech' && profile.role !== 'admin') return;
+    if (!VAPID_KEY || VAPID_KEY === 'PASTE_YOUR_VAPID_KEY_HERE') return;
+
+    const registerFcmToken = async () => {
+      try {
+        const permission = await Notification.requestPermission();
+        if (permission !== 'granted') return;
+        const token = await getToken(messaging, { vapidKey: VAPID_KEY });
+        if (!token) return;
+        const userRef = doc(db, 'users', firebaseUser.uid);
+        await updateDoc(userRef, { fcmToken: token });
+      } catch (err) {
+        console.warn('FCM token registration failed:', err.message);
+      }
+    };
+    registerFcmToken();
+  }, [firebaseUser, profile]);
 
   useEffect(() => {
     if (firebaseUser) {
@@ -412,6 +434,7 @@ function App() {
         lng: geo.lng,
         task: requestForm.service,
         details: requestForm.details,
+        serialNumber: requestForm.serialNumber || '',
         status: nearest ? 'Dispatched' : 'Pending',
         assignedTechName: nearest?.name || '',
         assignedTechEmail: nearest?.email || '',
@@ -434,6 +457,7 @@ function App() {
         location: '',
         service: '',
         details: '',
+        serialNumber: '',
       });
     } catch (error) {
       console.error('Submit request failed', error);
@@ -1090,16 +1114,26 @@ function App() {
                   className="mt-2 w-full rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3 text-slate-100"
                 />
               </label>
-              <label className="block">
-                <span className="text-slate-300 text-sm">Details</span>
-                <textarea
-                  value={requestForm.details}
-                  onChange={(e) => setRequestForm((prev) => ({ ...prev, details: e.target.value }))}
-                  rows={3}
-                  placeholder="Describe the issue or service request"
-                  className="mt-2 w-full rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3 text-slate-100"
-                />
-              </label>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <label className="block">
+                  <span className="text-slate-300 text-sm">Hardware serial number</span>
+                  <input
+                    value={requestForm.serialNumber}
+                    onChange={(e) => setRequestForm((prev) => ({ ...prev, serialNumber: e.target.value }))}
+                    placeholder="e.g. SRV-2A4F8B"
+                    className="mt-2 w-full rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3 text-slate-100 font-mono"
+                  />
+                </label>
+                <label className="block">
+                  <span className="text-slate-300 text-sm">Failure / fault details</span>
+                  <input
+                    value={requestForm.details}
+                    onChange={(e) => setRequestForm((prev) => ({ ...prev, details: e.target.value }))}
+                    placeholder="Power supply failed, NIC unreachable, etc."
+                    className="mt-2 w-full rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3 text-slate-100"
+                  />
+                </label>
+              </div>
               {requestError && <div className="rounded-2xl bg-red-900/50 p-3 text-red-200">{requestError}</div>}
               {requestSuccess && <div className="rounded-2xl bg-emerald-900/50 p-3 text-emerald-200">{requestSuccess}</div>}
               <button type="submit" className="rounded-2xl bg-blue-600 px-5 py-3 text-white font-semibold hover:bg-blue-500 transition">
@@ -1302,6 +1336,9 @@ function App() {
                         <h2 className="text-xl font-semibold text-white">{job.client}</h2>
                         <p className="text-slate-400 mt-2">{job.location}</p>
                         <p className="text-slate-300 mt-3">{job.task}</p>
+                        {job.serialNumber && (
+                          <p className="text-slate-300 mt-2 font-mono text-sm">S/N: <span className="text-amber-300">{job.serialNumber}</span></p>
+                        )}
                         {job.details && <p className="text-slate-400 mt-2">{job.details}</p>}
                       </div>
                       <div className="space-y-2 text-right">
