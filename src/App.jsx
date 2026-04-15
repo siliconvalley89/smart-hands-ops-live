@@ -13,7 +13,7 @@ import {
   updatePassword,
 } from 'firebase/auth';
 import { jsPDF } from 'jspdf';
-import logoPath from './assets/logo.jpg';
+import logoPath from './assets/sv-smart-dispatch-logo.jpg';
 import {
   Briefcase,
   Wrench,
@@ -29,6 +29,7 @@ import {
   CheckCircle,
   Plus,
   FileText,
+  Shield,
 } from 'lucide-react';
 
 const formatDate = (value) => {
@@ -138,7 +139,7 @@ function App() {
   const [techs, setTechs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [uploadingId, setUploadingId] = useState(null);
-  const [requestForm, setRequestForm] = useState({ name: '', email: '', phone: '', location: '', service: '', details: '', serialNumber: '' });
+  const [requestForm, setRequestForm] = useState({ name: '', email: '', phone: '', location: '', service: '', details: '', serialNumber: '', scheduledFor: '' });
   const [requestSuccess, setRequestSuccess] = useState('');
   const [requestError, setRequestError] = useState('');
   const [newTech, setNewTech] = useState({ name: '', email: '', phone: '', location: '' });
@@ -157,6 +158,10 @@ function App() {
   const [showAddUserPanel, setShowAddUserPanel] = useState(true);
   const [showJobsPanel, setShowJobsPanel] = useState(true);
   const [geoEventBusyJobId, setGeoEventBusyJobId] = useState(null);
+  const [savedRoles, setSavedRoles] = useState({});
+  const [requestFormOpen, setRequestFormOpen] = useState(true);
+  const [editingJobId, setEditingJobId] = useState(null);
+  const [jobEdits, setJobEdits] = useState({});
 
   useEffect(() => {
     const authUnsub = onAuthStateChanged(auth, async (user) => {
@@ -435,6 +440,7 @@ function App() {
         task: requestForm.service,
         details: requestForm.details,
         serialNumber: requestForm.serialNumber || '',
+        scheduledFor: requestForm.scheduledFor ? new Date(requestForm.scheduledFor) : null,
         status: nearest ? 'Dispatched' : 'Pending',
         assignedTechName: nearest?.name || '',
         assignedTechEmail: nearest?.email || '',
@@ -458,6 +464,7 @@ function App() {
         service: '',
         details: '',
         serialNumber: '',
+        scheduledFor: '',
       });
     } catch (error) {
       console.error('Submit request failed', error);
@@ -603,12 +610,13 @@ function App() {
           });
         },
         (error) => reject(error),
-        { enableHighAccuracy: true, timeout: 10000 }
+        { enableHighAccuracy: true, timeout: 20000, maximumAge: 30000 }
       );
     });
   };
 
   const recordTechGeoEvent = async (job, eventType) => {
+    setAppError('');
     try {
       setGeoEventBusyJobId(job.id);
       const coords = await getCurrentCoordinates();
@@ -678,6 +686,7 @@ function App() {
         }, { merge: true });
       }
 
+      setSavedRoles((prev) => ({ ...prev, [userItem.id]: true }));
       setAccountMessage(`Updated role for ${userItem.displayName || userItem.email}.`);
     } catch (error) {
       console.error('Update user role failed', error);
@@ -867,6 +876,31 @@ function App() {
     }
   };
 
+  const saveJobEdits = async (job) => {
+    const edits = jobEdits[job.id];
+    if (!edits || Object.keys(edits).length === 0) { setEditingJobId(null); return; }
+    try {
+      await updateDoc(doc(db, 'jobs', job.id), { ...edits, updatedAt: new Date() });
+      setEditingJobId(null);
+      setJobEdits((prev) => { const next = { ...prev }; delete next[job.id]; return next; });
+    } catch (error) {
+      console.error('Save job edits failed', error);
+      setAppError('Unable to save job edits.');
+    }
+  };
+
+  const adminSignOffWork = async (job) => {
+    try {
+      await updateDoc(doc(db, 'jobs', job.id), {
+        adminSignedOff: true,
+        adminSignedOffAt: new Date(),
+      });
+    } catch (error) {
+      console.error('Admin sign-off failed', error);
+      setAppError('Unable to sign off work.');
+    }
+  };
+
   const assignTechnicianToJob = async (job) => {
     const techId = assignments[job.id];
     if (!techId) {
@@ -878,6 +912,11 @@ function App() {
     if (!tech) {
       setAppError('Selected technician not found.');
       return;
+    }
+
+    if (tech.status === 'busy') {
+      const confirmed = window.confirm(`${tech.name} is currently assigned to another job. Assign them to this job anyway?`);
+      if (!confirmed) return;
     }
 
     try {
@@ -1024,7 +1063,7 @@ function App() {
       <nav className="bg-slate-800 border-b border-slate-700 p-4 sticky top-0 z-50">
         <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
           <div className="flex items-center gap-3">
-            <div className="bg-blue-600 p-2 rounded-lg"><Briefcase size={24} className="text-white" /></div>
+            <img src={logoPath} alt={APP_DISPLAY_NAME} className="h-10 w-auto rounded-lg" />
             <div>
               <div className="text-slate-400 text-sm">Signed in as {profile.displayName}</div>
               <h1 className="text-xl font-bold">{APP_DISPLAY_NAME}</h1>
@@ -1098,8 +1137,13 @@ function App() {
 
         {(profile.role === 'admin' || profile.role === 'client') && (
           <section className="bg-slate-800 rounded-3xl border border-slate-700 p-5">
-            <div className="flex items-center gap-3 mb-4 text-lg font-semibold"><Calendar size={20} /> {profile.role === 'client' ? 'Request service' : 'Client request form'}</div>
-            <form onSubmit={submitRequest} className="grid gap-4">
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-3 text-lg font-semibold"><Calendar size={20} /> {profile.role === 'client' ? 'Request service' : 'Client request form'}</div>
+              <button type="button" onClick={() => setRequestFormOpen((prev) => !prev)} className="rounded-2xl border border-slate-600 px-4 py-2 text-sm text-slate-200 hover:bg-slate-700 transition">
+                {requestFormOpen ? 'Collapse' : 'Expand'}
+              </button>
+            </div>
+            {requestFormOpen && <form onSubmit={submitRequest} className="grid gap-4">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <label className="block">
                   <span className="text-slate-300 text-sm">Name</span>
@@ -1170,12 +1214,21 @@ function App() {
                   />
                 </label>
               </div>
+              <label className="block">
+                <span className="text-slate-300 text-sm">Scheduled date &amp; time <span className="text-slate-500 text-xs">(optional — leave blank for immediate dispatch)</span></span>
+                <input
+                  type="datetime-local"
+                  value={requestForm.scheduledFor}
+                  onChange={(e) => setRequestForm((prev) => ({ ...prev, scheduledFor: e.target.value }))}
+                  className="mt-2 w-full rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3 text-slate-100"
+                />
+              </label>
               {requestError && <div className="rounded-2xl bg-red-900/50 p-3 text-red-200">{requestError}</div>}
               {requestSuccess && <div className="rounded-2xl bg-emerald-900/50 p-3 text-emerald-200">{requestSuccess}</div>}
               <button type="submit" className="rounded-2xl bg-blue-600 px-5 py-3 text-white font-semibold hover:bg-blue-500 transition">
                 Submit request
               </button>
-            </form>
+            </form>}
           </section>
         )}
 
@@ -1293,7 +1346,7 @@ function App() {
                       <select
                         value={userRoleEdits[userItem.id] || userItem.role || 'client'}
                         onChange={(e) => setUserRoleEdits((prev) => ({ ...prev, [userItem.id]: e.target.value }))}
-                        disabled={userItem.id === (profile?.uid || profile?.id)}
+                        disabled={userItem.id === (profile?.uid || profile?.id) || !!savedRoles[userItem.id]}
                         className="w-full rounded-2xl border border-slate-700 bg-slate-950 px-4 py-2 text-slate-100"
                       >
                         <option value="admin">Admin</option>
@@ -1301,14 +1354,24 @@ function App() {
                         <option value="client">Client</option>
                       </select>
 
-                      <button
-                        type="button"
-                        onClick={() => updateUserRole(userItem)}
-                        disabled={userItem.id === (profile?.uid || profile?.id)}
-                        className="rounded-2xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed"
-                      >
-                        Save role
-                      </button>
+                      {savedRoles[userItem.id] ? (
+                        <button
+                          type="button"
+                          onClick={() => setSavedRoles((prev) => ({ ...prev, [userItem.id]: false }))}
+                          className="rounded-2xl bg-slate-600 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-500 transition"
+                        >
+                          Edit role
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => updateUserRole(userItem)}
+                          disabled={userItem.id === (profile?.uid || profile?.id)}
+                          className="rounded-2xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          Save role
+                        </button>
+                      )}
 
                       <button
                         type="button"
@@ -1368,20 +1431,50 @@ function App() {
                           <span className={`inline-flex rounded-full px-3 py-1 ${job.status === 'Completed' ? 'bg-emerald-500/10 text-emerald-300' : job.status === 'Ready for Signoff' ? 'bg-orange-500/10 text-orange-300' : 'bg-blue-500/10 text-blue-300'}`}>
                             {job.status}
                           </span>
+                          {profile.role === 'admin' && (
+                            <button
+                              type="button"
+                              onClick={() => setEditingJobId((prev) => prev === job.id ? null : job.id)}
+                              className="ml-2 inline-flex items-center gap-1 rounded-xl border border-slate-600 bg-slate-800 px-2 py-1 text-xs text-slate-300 hover:bg-slate-700 transition"
+                            >
+                              <Wrench size={12} /> {editingJobId === job.id ? 'Cancel edit' : 'Edit details'}
+                            </button>
+                          )}
                         </div>
-                        <h2 className="text-xl font-semibold text-white">{job.client}</h2>
-                        <p className="text-slate-400 mt-2">{job.location}</p>
-                        <p className="text-slate-300 mt-3">{job.task}</p>
-                        {job.serialNumber && (
-                          <p className="text-slate-300 mt-2 font-mono text-sm">S/N: <span className="text-amber-300">{job.serialNumber}</span></p>
+                        {editingJobId === job.id ? (
+                          <div className="grid gap-3 mt-2">
+                            <input value={jobEdits[job.id]?.client ?? job.client ?? ''} onChange={(e) => setJobEdits((prev) => ({ ...prev, [job.id]: { ...prev[job.id], client: e.target.value } }))} placeholder="Client name" className="rounded-2xl border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100" />
+                            <input value={jobEdits[job.id]?.clientPhone ?? job.clientPhone ?? ''} onChange={(e) => setJobEdits((prev) => ({ ...prev, [job.id]: { ...prev[job.id], clientPhone: e.target.value } }))} placeholder="Client phone" className="rounded-2xl border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100" />
+                            <input value={jobEdits[job.id]?.clientEmail ?? job.clientEmail ?? ''} onChange={(e) => setJobEdits((prev) => ({ ...prev, [job.id]: { ...prev[job.id], clientEmail: e.target.value } }))} placeholder="Client email" className="rounded-2xl border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100" />
+                            <input value={jobEdits[job.id]?.location ?? job.rawLocation ?? job.location ?? ''} onChange={(e) => setJobEdits((prev) => ({ ...prev, [job.id]: { ...prev[job.id], location: e.target.value, rawLocation: e.target.value } }))} placeholder="Location" className="rounded-2xl border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100" />
+                            <input value={jobEdits[job.id]?.task ?? job.task ?? ''} onChange={(e) => setJobEdits((prev) => ({ ...prev, [job.id]: { ...prev[job.id], task: e.target.value } }))} placeholder="Service / task" className="rounded-2xl border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100" />
+                            <input value={jobEdits[job.id]?.serialNumber ?? job.serialNumber ?? ''} onChange={(e) => setJobEdits((prev) => ({ ...prev, [job.id]: { ...prev[job.id], serialNumber: e.target.value } }))} placeholder="Serial number" className="rounded-2xl border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100 font-mono" />
+                            <input value={jobEdits[job.id]?.details ?? job.details ?? ''} onChange={(e) => setJobEdits((prev) => ({ ...prev, [job.id]: { ...prev[job.id], details: e.target.value } }))} placeholder="Fault / details" className="rounded-2xl border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100" />
+                            <button type="button" onClick={() => saveJobEdits(job)} className="rounded-2xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500 transition">Save changes</button>
+                          </div>
+                        ) : (
+                          <>
+                            <h2 className="text-xl font-semibold text-white">{job.client}</h2>
+                            <p className="text-slate-400 mt-2">{job.location}</p>
+                            <p className="text-slate-300 mt-3">{job.task}</p>
+                            {job.serialNumber && (
+                              <p className="text-slate-300 mt-2 font-mono text-sm">S/N: <span className="text-amber-300">{job.serialNumber}</span></p>
+                            )}
+                            {job.details && <p className="text-slate-400 mt-2">{job.details}</p>}
+                          </>
                         )}
-                        {job.details && <p className="text-slate-400 mt-2">{job.details}</p>}
                       </div>
                       <div className="space-y-2 text-right">
                         <div className="text-slate-400 text-sm">Assigned tech</div>
                         <div className="font-semibold">{job.assignedTechName || 'Unassigned'}</div>
                         {(job.assignedTechDistanceMiles ?? job.assignedTechDistanceKm) != null && (
                           <div className="text-slate-400 text-sm">{(job.assignedTechDistanceMiles ?? job.assignedTechDistanceKm).toFixed(1)} mi away</div>
+                        )}
+                        {job.scheduledFor && (
+                          <div>
+                            <div className="text-slate-400 text-sm mt-3">Scheduled for</div>
+                            <div className="text-amber-300 text-sm font-semibold">{formatDate(job.scheduledFor)}</div>
+                          </div>
                         )}
                         <div className="text-slate-400 text-sm mt-3">Created</div>
                         <div className="text-slate-200 text-sm">{formatDate(job.createdAt)}</div>
@@ -1553,7 +1646,7 @@ function App() {
                             </button>
                           </div>
                         )}
-                        {(job.serviceFee || job.serviceFee === 0) && (
+                        {(job.serviceFee || job.serviceFee === 0) && profile?.role !== 'tech' && (
                           <div className="mt-4 rounded-2xl bg-slate-900 p-3 border border-slate-700 text-slate-200">
                             <div className="text-slate-400 text-sm">Service fee</div>
                             <div className="font-semibold text-slate-100">${Number(job.serviceFee || 0).toFixed(2)}</div>
@@ -1612,9 +1705,13 @@ function App() {
                             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                               <div className="text-slate-500 text-xs">Only admin and client see invoice amounts.</div>
                               {job.status !== 'Pending' && (
-                                <button onClick={() => generateInvoicePdf(job)} className="rounded-2xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-500 transition">
-                                  Download invoice
-                                </button>
+                                profile.role === 'admin' || job.adminSignedOff ? (
+                                  <button onClick={() => generateInvoicePdf(job)} className="rounded-2xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-500 transition">
+                                    Download invoice
+                                  </button>
+                                ) : profile.role === 'client' ? (
+                                  <div className="text-slate-500 text-xs italic">Invoice locked until admin signs off.</div>
+                                ) : null
                               )}
                             </div>
                           </div>
@@ -1668,6 +1765,7 @@ function App() {
                         })}
                         {job.checkOutAt && <div>Check-out: {formatDate(job.checkOutAt)} ({Number(job.checkOutLat || 0).toFixed(5)}, {Number(job.checkOutLng || 0).toFixed(5)})</div>}
                         {job.clientSignedOff && <div className="text-emerald-300">Client signed off</div>}
+                        {job.adminSignedOff && <div className="text-teal-300">Admin signed off{job.adminSignedOffAt ? ` · ${formatDate(job.adminSignedOffAt)}` : ''}</div>}
                       </div>
                       <div className="flex flex-wrap gap-3">
                         {profile.role === 'tech' && !job.checkInAt && (
@@ -1718,8 +1816,13 @@ function App() {
                             <CheckCircle size={16} /> Sign off work
                           </button>
                         )}
-                        {profile.role === 'admin' && job.status === 'Completed' && (
-                          <div className="rounded-2xl bg-emerald-500/10 px-4 py-2 text-sm text-emerald-200">Closed</div>
+                        {profile.role === 'admin' && job.status === 'Completed' && !job.adminSignedOff && (
+                          <button onClick={() => adminSignOffWork(job)} className="rounded-2xl bg-teal-600 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-500 transition flex items-center gap-2">
+                            <Shield size={16} /> Sign off work
+                          </button>
+                        )}
+                        {profile.role === 'admin' && job.adminSignedOff && (
+                          <div className="rounded-2xl bg-teal-500/10 px-4 py-2 text-sm text-teal-200 flex items-center gap-2"><Shield size={14} /> Admin signed off</div>
                         )}
                         {profile.role === 'admin' && (
                           <button onClick={() => handleDelete(job.id)} className="rounded-2xl bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-500 transition flex items-center gap-2">
