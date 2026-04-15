@@ -515,6 +515,7 @@ function App() {
         displayName: newAccount.name,
         email: newAccount.email.trim(),
         role: newAccount.role,
+        mustChangePassword: true,
       });
 
       if (newAccount.role === 'tech') {
@@ -575,6 +576,10 @@ function App() {
       const credential = EmailAuthProvider.credential(currentUser.email, passwordForm.current);
       await reauthenticateWithCredential(currentUser, credential);
       await updatePassword(currentUser, passwordForm.next);
+      // Clear the flag permanently in Firestore so section stays hidden after refresh
+      const userRef = doc(db, 'users', currentUser.uid);
+      await updateDoc(userRef, { mustChangePassword: false });
+      setProfile((prev) => ({ ...prev, mustChangePassword: false }));
       setPasswordForm({ current: '', next: '', confirm: '' });
       setPasswordMessage('Password updated successfully.');
       setPasswordSectionHidden(true);
@@ -621,6 +626,23 @@ function App() {
         payload.checkOutAt = new Date();
         payload.checkOutLat = coords.lat;
         payload.checkOutLng = coords.lng;
+      }
+
+      if (eventType === 'breakStart') {
+        const existing = Array.isArray(job.breaks) ? job.breaks : [];
+        payload.breaks = [...existing, { startAt: new Date(), startLat: coords.lat, startLng: coords.lng }];
+      }
+
+      if (eventType === 'breakEnd') {
+        const existing = Array.isArray(job.breaks) ? [...job.breaks] : [];
+        let lastOpenIdx = -1;
+        for (let i = existing.length - 1; i >= 0; i--) {
+          if (existing[i].startAt && !existing[i].endAt) { lastOpenIdx = i; break; }
+        }
+        if (lastOpenIdx >= 0) {
+          existing[lastOpenIdx] = { ...existing[lastOpenIdx], endAt: new Date(), endLat: coords.lat, endLng: coords.lng };
+        }
+        payload.breaks = existing;
       }
 
       await updateDoc(doc(db, 'jobs', job.id), payload);
@@ -805,6 +827,8 @@ function App() {
   const handlePhotoUpload = async (event, jobId, type) => {
     const file = event.target.files?.[0];
     if (!file) return;
+    // Reset the input so the same file can be re-selected after a replace
+    event.target.value = '';
     try {
       setUploadingId(jobId);
       const storageRef = ref(storage, `jobs/${jobId}/${type}-${file.name}`);
@@ -819,6 +843,18 @@ function App() {
       setAppError('Photo upload failed.');
     } finally {
       setUploadingId(null);
+    }
+  };
+
+  const deletePhoto = async (jobId, type) => {
+    try {
+      await updateDoc(doc(db, 'jobs', jobId), {
+        [`${type}PhotoUrl`]: '',
+        updatedAt: new Date(),
+      });
+    } catch (error) {
+      console.error('Delete photo failed', error);
+      setAppError('Unable to delete photo.');
     }
   };
 
@@ -1024,7 +1060,7 @@ function App() {
           </div>
         </section>
 
-        {!passwordSectionHidden && (
+        {profile.mustChangePassword === true && (
           <section className="rounded-3xl bg-slate-950/60 border border-slate-700 p-6 grid gap-6">
             <div>
               <h2 className="text-xl font-semibold text-white">Change password</h2>
@@ -1361,28 +1397,50 @@ function App() {
                             {job.beforePhotoUrl ? (
                               <img src={job.beforePhotoUrl} alt="Before" className="w-full rounded-2xl object-cover" />
                             ) : (
-                              <div className="rounded-2xl border border-dashed border-slate-700 p-8 text-center text-slate-500">Missing</div>
+                              <div className="rounded-2xl border border-dashed border-slate-700 p-8 text-center text-slate-500">No photo yet</div>
                             )}
                             {['tech', 'admin'].includes(profile.role) && (
-                              <label htmlFor={`before-${job.id}`} className="mt-3 inline-flex cursor-pointer items-center gap-2 rounded-2xl border border-slate-600 bg-slate-800 px-4 py-2 text-sm text-slate-200 hover:bg-slate-700 transition">
-                                <Camera size={16} /> Upload before
-                              </label>
+                              <div className="mt-3 flex flex-wrap gap-2">
+                                <label htmlFor={`before-cam-${job.id}`} className="cursor-pointer inline-flex items-center gap-2 rounded-2xl border border-slate-600 bg-slate-800 px-3 py-2 text-sm text-slate-200 hover:bg-slate-700 transition">
+                                  <Camera size={15} /> {job.beforePhotoUrl ? 'Retake' : 'Take photo'}
+                                </label>
+                                <input id={`before-cam-${job.id}`} type="file" className="hidden" accept="image/*" capture="environment" onChange={(e) => handlePhotoUpload(e, job.id, 'before')} />
+                                <label htmlFor={`before-file-${job.id}`} className="cursor-pointer inline-flex items-center gap-2 rounded-2xl border border-slate-600 bg-slate-800 px-3 py-2 text-sm text-slate-200 hover:bg-slate-700 transition">
+                                  <Plus size={15} /> {job.beforePhotoUrl ? 'Replace from gallery' : 'From gallery'}
+                                </label>
+                                <input id={`before-file-${job.id}`} type="file" className="hidden" accept="image/*" onChange={(e) => handlePhotoUpload(e, job.id, 'before')} />
+                                {job.beforePhotoUrl && (
+                                  <button type="button" onClick={() => deletePhoto(job.id, 'before')} className="inline-flex items-center gap-2 rounded-2xl border border-red-800 bg-red-950/40 px-3 py-2 text-sm text-red-300 hover:bg-red-900/50 transition">
+                                    <Trash2 size={15} /> Delete
+                                  </button>
+                                )}
+                              </div>
                             )}
-                            <input id={`before-${job.id}`} type="file" className="hidden" accept="image/*" capture="environment" onChange={(e) => handlePhotoUpload(e, job.id, 'before')} />
                           </div>
                           <div className="rounded-2xl bg-slate-900 p-3 border border-slate-700">
                             <div className="text-slate-300 text-sm mb-2">After photo</div>
                             {job.afterPhotoUrl ? (
                               <img src={job.afterPhotoUrl} alt="After" className="w-full rounded-2xl object-cover" />
                             ) : (
-                              <div className="rounded-2xl border border-dashed border-slate-700 p-8 text-center text-slate-500">Missing</div>
+                              <div className="rounded-2xl border border-dashed border-slate-700 p-8 text-center text-slate-500">No photo yet</div>
                             )}
                             {['tech', 'admin'].includes(profile.role) && (
-                              <label htmlFor={`after-${job.id}`} className="mt-3 inline-flex cursor-pointer items-center gap-2 rounded-2xl border border-slate-600 bg-slate-800 px-4 py-2 text-sm text-slate-200 hover:bg-slate-700 transition">
-                                <Camera size={16} /> Upload after
-                              </label>
+                              <div className="mt-3 flex flex-wrap gap-2">
+                                <label htmlFor={`after-cam-${job.id}`} className="cursor-pointer inline-flex items-center gap-2 rounded-2xl border border-slate-600 bg-slate-800 px-3 py-2 text-sm text-slate-200 hover:bg-slate-700 transition">
+                                  <Camera size={15} /> {job.afterPhotoUrl ? 'Retake' : 'Take photo'}
+                                </label>
+                                <input id={`after-cam-${job.id}`} type="file" className="hidden" accept="image/*" capture="environment" onChange={(e) => handlePhotoUpload(e, job.id, 'after')} />
+                                <label htmlFor={`after-file-${job.id}`} className="cursor-pointer inline-flex items-center gap-2 rounded-2xl border border-slate-600 bg-slate-800 px-3 py-2 text-sm text-slate-200 hover:bg-slate-700 transition">
+                                  <Plus size={15} /> {job.afterPhotoUrl ? 'Replace from gallery' : 'From gallery'}
+                                </label>
+                                <input id={`after-file-${job.id}`} type="file" className="hidden" accept="image/*" onChange={(e) => handlePhotoUpload(e, job.id, 'after')} />
+                                {job.afterPhotoUrl && (
+                                  <button type="button" onClick={() => deletePhoto(job.id, 'after')} className="inline-flex items-center gap-2 rounded-2xl border border-red-800 bg-red-950/40 px-3 py-2 text-sm text-red-300 hover:bg-red-900/50 transition">
+                                    <Trash2 size={15} /> Delete
+                                  </button>
+                                )}
+                              </div>
                             )}
-                            <input id={`after-${job.id}`} type="file" className="hidden" accept="image/*" capture="environment" onChange={(e) => handlePhotoUpload(e, job.id, 'after')} />
                           </div>
                         </div>
                       </div>
@@ -1596,6 +1654,18 @@ function App() {
                         {job.clientPhone && <div>Phone: {job.clientPhone}</div>}
                         {job.clientEmail && <div>Email: {job.clientEmail}</div>}
                         {job.checkInAt && <div>Check-in: {formatDate(job.checkInAt)} ({Number(job.checkInLat || 0).toFixed(5)}, {Number(job.checkInLng || 0).toFixed(5)})</div>}
+                        {(job.breaks || []).map((brk, idx) => {
+                          const durationMs = brk.endAt
+                            ? (brk.endAt?.toDate ? brk.endAt.toDate() : new Date(brk.endAt)) - (brk.startAt?.toDate ? brk.startAt.toDate() : new Date(brk.startAt))
+                            : null;
+                          const durationMin = durationMs != null ? Math.round(durationMs / 60000) : null;
+                          const short = durationMin != null && durationMin < 30;
+                          return (
+                            <div key={idx} className={short ? 'text-red-400' : ''}>
+                              Break {idx + 1}: out {formatDate(brk.startAt)}{brk.endAt ? ` → back ${formatDate(brk.endAt)} (${durationMin} min${short ? ' ⚠ under 30 min' : ''})` : ' — on break'}
+                            </div>
+                          );
+                        })}
                         {job.checkOutAt && <div>Check-out: {formatDate(job.checkOutAt)} ({Number(job.checkOutLat || 0).toFixed(5)}, {Number(job.checkOutLng || 0).toFixed(5)})</div>}
                         {job.clientSignedOff && <div className="text-emerald-300">Client signed off</div>}
                       </div>
@@ -1609,15 +1679,35 @@ function App() {
                             <MapPin size={16} /> {geoEventBusyJobId === job.id ? 'Checking in...' : 'Check in on site'}
                           </button>
                         )}
-                        {profile.role === 'tech' && job.checkInAt && !job.checkOutAt && (
-                          <button
-                            onClick={() => recordTechGeoEvent(job, 'checkOut')}
-                            disabled={geoEventBusyJobId === job.id}
-                            className="rounded-2xl bg-fuchsia-600 px-4 py-2 text-sm font-semibold text-white hover:bg-fuchsia-500 transition flex items-center gap-2 disabled:opacity-60"
-                          >
-                            <MapPin size={16} /> {geoEventBusyJobId === job.id ? 'Checking out...' : 'Check out from site'}
-                          </button>
-                        )}
+                        {profile.role === 'tech' && job.checkInAt && !job.checkOutAt && (() => {
+                          const hasActiveBreak = (job.breaks || []).some(b => b.startAt && !b.endAt);
+                          return hasActiveBreak ? (
+                            <button
+                              onClick={() => recordTechGeoEvent(job, 'breakEnd')}
+                              disabled={geoEventBusyJobId === job.id}
+                              className="rounded-2xl bg-green-600 px-4 py-2 text-sm font-semibold text-white hover:bg-green-500 transition flex items-center gap-2 disabled:opacity-60"
+                            >
+                              <Clock size={16} /> {geoEventBusyJobId === job.id ? 'Clocking in...' : 'Clock back in from break'}
+                            </button>
+                          ) : (
+                            <>
+                              <button
+                                onClick={() => recordTechGeoEvent(job, 'breakStart')}
+                                disabled={geoEventBusyJobId === job.id}
+                                className="rounded-2xl bg-amber-600 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-500 transition flex items-center gap-2 disabled:opacity-60"
+                              >
+                                <Clock size={16} /> {geoEventBusyJobId === job.id ? 'Clocking out...' : 'Start meal break'}
+                              </button>
+                              <button
+                                onClick={() => recordTechGeoEvent(job, 'checkOut')}
+                                disabled={geoEventBusyJobId === job.id}
+                                className="rounded-2xl bg-fuchsia-600 px-4 py-2 text-sm font-semibold text-white hover:bg-fuchsia-500 transition flex items-center gap-2 disabled:opacity-60"
+                              >
+                                <MapPin size={16} /> {geoEventBusyJobId === job.id ? 'Checking out...' : 'Check out from site'}
+                              </button>
+                            </>
+                          );
+                        })()}
                         {profile.role === 'tech' && canRequestSignoff && (
                           <button onClick={() => requestClientSignoff(job)} className="rounded-2xl bg-orange-500 px-4 py-2 text-sm font-semibold text-white hover:bg-orange-400 transition flex items-center gap-2">
                             <FileText size={16} /> Request sign-off

@@ -32,10 +32,10 @@ service cloud.firestore {
           request.resource.data.role in ['tech', 'client']
         )
       );
-      // Admins can do full updates; users can update only their own fcmToken field
+      // Admins can do full updates; users can update only their own fcmToken and mustChangePassword fields
       allow update: if isAdmin() ||
         (isSignedIn() && request.auth.uid == userId &&
-         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['fcmToken']));
+         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['fcmToken', 'mustChangePassword']));
       allow delete: if isAdmin();
     }
 
@@ -67,6 +67,7 @@ service cloud.firestore {
         (isTech() && resource.data.assignedTechEmail == request.auth.token.email) ||
         (isClient() && resource.data.clientEmail == request.auth.token.email)
       );
+      allow delete: if isAdmin();
     }
   }
 }
