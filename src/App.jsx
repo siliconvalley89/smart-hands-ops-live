@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { db, storage, auth, messaging, VAPID_KEY } from './firebase';
 import { collection, onSnapshot, addDoc, query, orderBy, deleteDoc, doc, updateDoc, getDocs, getDoc, setDoc, where } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
@@ -11,8 +11,8 @@ import {
   EmailAuthProvider,
   reauthenticateWithCredential,
   updatePassword,
+  sendPasswordResetEmail,
 } from 'firebase/auth';
-import { jsPDF } from 'jspdf';
 import logoPath from './assets/sv-smart-dispatch-logo.jpg';
 import {
   Briefcase,
@@ -58,6 +58,7 @@ const loadImageDataUrl = async (url) => {
 
 const generateInvoicePdf = async (job) => {
   try {
+    const { jsPDF } = await import('jspdf');
     const doc = new jsPDF({ unit: 'pt', format: 'letter' });
     const logoDataUrl = await loadImageDataUrl(logoPath);
     doc.addImage(logoDataUrl, 'JPEG', 40, 40, 120, 40);
@@ -158,6 +159,13 @@ function App() {
   const [showAddUserPanel, setShowAddUserPanel] = useState(true);
   const [showJobsPanel, setShowJobsPanel] = useState(false);
   const [showCompletedJobsPanel, setShowCompletedJobsPanel] = useState(false);
+  const [jobSearch, setJobSearch] = useState('');
+  const [jobStatusFilter, setJobStatusFilter] = useState('All');
+  const [completedSearch, setCompletedSearch] = useState('');
+  const [resetEmail, setResetEmail] = useState('');
+  const [resetSent, setResetSent] = useState(false);
+  const [resetError, setResetError] = useState('');
+  const [showResetForm, setShowResetForm] = useState(false);
   const [profilePhotoUploadBusy, setProfilePhotoUploadBusy] = useState(false);
   const [geoEventBusyJobId, setGeoEventBusyJobId] = useState(null);
   const [savedRoles, setSavedRoles] = useState({});
@@ -325,6 +333,19 @@ function App() {
     } catch (error) {
       console.error('Login failed', error);
       setLoginError('Login failed. Check your email and password.');
+    }
+  };
+
+  const sendReset = async () => {
+    setResetError('');
+    setResetSent(false);
+    if (!resetEmail.trim()) { setResetError('Enter your email address.'); return; }
+    try {
+      await sendPasswordResetEmail(auth, resetEmail.trim());
+      setResetSent(true);
+    } catch (error) {
+      console.error('Password reset failed', error);
+      setResetError('Could not send reset email. Check the address and try again.');
     }
   };
 
@@ -550,7 +571,7 @@ function App() {
 
       await firebaseSignOut(auth);
       await signInWithEmailAndPassword(auth, adminEmail, adminPassword);
-      // Manually restore admin state — avoids UI flicker from onAuthStateChanged
+      // Manually restore admin state � avoids UI flicker from onAuthStateChanged
       const adminDocSnap = await getDoc(doc(db, 'users', adminUid));
       setFirebaseUser(auth.currentUser);
       if (adminDocSnap.exists()) setProfile({ id: adminDocSnap.id, ...adminDocSnap.data() });
@@ -655,6 +676,7 @@ function App() {
         payload.checkInAt = new Date();
         payload.checkInLat = coords.lat;
         payload.checkInLng = coords.lng;
+        payload.status = 'On Site';
       }
 
       if (eventType === 'checkOut') {
@@ -939,10 +961,12 @@ function App() {
 
   const adminSignOffWork = async (job) => {
     try {
-      await updateDoc(doc(db, 'jobs', job.id), {
-        adminSignedOff: true,
-        adminSignedOffAt: new Date(),
-      });
+      const updates = { adminSignedOff: true, adminSignedOffAt: new Date() };
+      if (job.status !== 'Completed') {
+        updates.status = 'Completed';
+        updates.completedAt = new Date();
+      }
+      await updateDoc(doc(db, 'jobs', job.id), updates);
     } catch (error) {
       console.error('Admin sign-off failed', error);
       setAppError('Unable to sign off work.');
@@ -1003,10 +1027,28 @@ function App() {
   const completedJobsCount = currentJobs.filter((job) => job.status === 'Completed').length;
   const activeJobs = currentJobs.filter((job) => job.status !== 'Completed');
   const completedJobs = currentJobs.filter((job) => job.status === 'Completed');
+  const filteredActiveJobs = activeJobs.filter((job) => {
+    const matchesStatus = jobStatusFilter === 'All' || job.status === jobStatusFilter;
+    const q = jobSearch.toLowerCase();
+    const matchesSearch = !q ||
+      (job.client || '').toLowerCase().includes(q) ||
+      (job.location || '').toLowerCase().includes(q) ||
+      (job.task || '').toLowerCase().includes(q) ||
+      (job.assignedTechName || '').toLowerCase().includes(q);
+    return matchesStatus && matchesSearch;
+  });
+  const filteredCompletedJobs = completedJobs.filter((job) => {
+    const q = completedSearch.toLowerCase();
+    return !q ||
+      (job.client || '').toLowerCase().includes(q) ||
+      (job.location || '').toLowerCase().includes(q) ||
+      (job.task || '').toLowerCase().includes(q) ||
+      (job.assignedTechName || '').toLowerCase().includes(q);
+  });
 
   if (!authReady) {
     return (
-      <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center">Loading…</div>
+      <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center">Loading�</div>
     );
   }
 
@@ -1015,7 +1057,7 @@ function App() {
       <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center p-4">
         <div className="max-w-md w-full bg-slate-900 border border-slate-700 rounded-3xl p-8 shadow-2xl">
           <div className="mb-6 flex items-center gap-3">
-            <div className="bg-blue-600 p-3 rounded-xl"><Lock size={24} /></div>
+            <div className="bg-violet-700 p-3 rounded-xl"><Lock size={24} /></div>
             <div>
               <h1 className="text-2xl font-bold">{APP_DISPLAY_NAME} Login</h1>
             </div>
@@ -1038,9 +1080,33 @@ function App() {
               className="w-full rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3 text-slate-100 outline-none"
             />
             {loginError && <div className="rounded-2xl bg-red-900/50 p-3 text-red-200">{loginError}</div>}
-            <button onClick={login} className="w-full rounded-2xl bg-blue-600 px-4 py-3 text-white font-semibold hover:bg-blue-500 transition">
+            <button onClick={login} className="w-full rounded-2xl bg-teal-600 px-4 py-3 text-white font-semibold hover:bg-teal-500 transition">
               Sign in
             </button>
+            <button
+              type="button"
+              onClick={() => { setShowResetForm((v) => !v); setResetSent(false); setResetError(''); }}
+              className="w-full text-sm text-slate-400 hover:text-slate-200 transition text-center"
+            >
+              Forgot password?
+            </button>
+            {showResetForm && (
+              <div className="space-y-3 rounded-2xl bg-slate-800 border border-slate-700 p-4">
+                <p className="text-slate-300 text-sm">Enter your email and we'll send a reset link.</p>
+                <input
+                  type="email"
+                  value={resetEmail}
+                  onChange={(e) => setResetEmail(e.target.value)}
+                  placeholder="email@example.com"
+                  className="w-full rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3 text-slate-100 outline-none text-sm"
+                />
+                {resetError && <div className="text-red-300 text-sm">{resetError}</div>}
+                {resetSent
+                  ? <div className="rounded-2xl bg-emerald-900/50 p-3 text-emerald-200 text-sm">Reset link sent — check your inbox.</div>
+                  : <button onClick={sendReset} className="w-full rounded-2xl bg-teal-600 px-4 py-2 text-white text-sm font-semibold hover:bg-teal-500 transition">Send reset link</button>
+                }
+              </div>
+            )}
             {adminSetupAllowed && !initialAdminOpen && (
               <button onClick={() => setInitialAdminOpen(true)} className="w-full rounded-2xl border border-slate-700 px-4 py-3 text-slate-200 hover:bg-slate-800 transition">
                 Create initial admin account
@@ -1088,7 +1154,7 @@ function App() {
           <h1 className="text-2xl font-bold">Account not set up yet</h1>
           <p className="text-slate-400 mt-4">Your Firebase user exists, but no role profile was found.</p>
           <p className="text-slate-400 mt-2">Create a record in the Firestore users collection with your UID, displayName, email, and role.</p>
-          <button onClick={logout} className="mt-6 rounded-2xl bg-blue-600 px-4 py-3 text-white font-semibold hover:bg-blue-500 transition">
+          <button onClick={logout} className="mt-6 rounded-2xl bg-teal-600 px-4 py-3 text-white font-semibold hover:bg-teal-500 transition">
             Sign out
           </button>
         </div>
@@ -1193,7 +1259,7 @@ function App() {
                 className="w-full rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3 text-slate-100"
               />
             </div>
-            {passwordMessage && <div className="rounded-2xl bg-blue-900/50 p-3 text-blue-200">{passwordMessage}</div>}
+            {passwordMessage && <div className="rounded-2xl bg-violet-900/50 p-3 text-violet-200">{passwordMessage}</div>}
             <button onClick={changeMyPassword} type="button" className="rounded-2xl bg-amber-600 px-5 py-3 text-white font-semibold hover:bg-amber-500 transition flex items-center justify-center gap-2">
               <Lock size={16} /> Update my password
             </button>
@@ -1280,7 +1346,7 @@ function App() {
                 </label>
               </div>
               <label className="block">
-                <span className="text-slate-300 text-sm">Scheduled date &amp; time <span className="text-slate-500 text-xs">(optional — leave blank for immediate dispatch)</span></span>
+                <span className="text-slate-300 text-sm">Scheduled date &amp; time <span className="text-slate-500 text-xs">(optional � leave blank for immediate dispatch)</span></span>
                 <input
                   type="datetime-local"
                   value={requestForm.scheduledFor}
@@ -1290,7 +1356,7 @@ function App() {
               </label>
               {requestError && <div className="rounded-2xl bg-red-900/50 p-3 text-red-200">{requestError}</div>}
               {requestSuccess && <div className="rounded-2xl bg-emerald-900/50 p-3 text-emerald-200">{requestSuccess}</div>}
-              <button type="submit" className="rounded-2xl bg-blue-600 px-5 py-3 text-white font-semibold hover:bg-blue-500 transition">
+              <button type="submit" className="rounded-2xl bg-teal-600 px-5 py-3 text-white font-semibold hover:bg-teal-500 transition">
                 Submit request
               </button>
             </form>}
@@ -1383,7 +1449,7 @@ function App() {
               </div>
             </div>
 
-            {accountMessage && <div className="rounded-2xl bg-blue-900/50 p-3 text-blue-200">{accountMessage}</div>}
+            {accountMessage && <div className="rounded-2xl bg-violet-900/50 p-3 text-violet-200">{accountMessage}</div>}
             <button onClick={createAccount} type="button" className="rounded-2xl bg-indigo-600 px-5 py-3 text-white font-semibold hover:bg-indigo-500 transition flex items-center justify-center gap-2">
               <Plus size={16} /> Create account
             </button>
@@ -1475,17 +1541,41 @@ function App() {
 
           {showJobsPanel && (
           <div className="grid gap-6">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+              <input
+                type="text"
+                placeholder="Search client, location, task, tech�"
+                value={jobSearch}
+                onChange={(e) => setJobSearch(e.target.value)}
+                className="flex-1 rounded-2xl bg-slate-800 border border-slate-600 px-4 py-2 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-teal-500"
+              />
+              <div className="flex flex-wrap gap-2">
+                {['All', 'Pending', 'Dispatched', 'On Site', 'Ready for Signoff'].map((s) => (
+                  <button
+                    key={s}
+                    onClick={() => setJobStatusFilter(s)}
+                    className={`rounded-full px-3 py-1 text-xs font-semibold transition ${
+                      jobStatusFilter === s
+                        ? 'bg-teal-600 text-white'
+                        : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+                    }`}
+                  >
+                    {s}
+                  </button>
+                ))}
+              </div>
+            </div>
           {loading ? (
-            <div className="rounded-3xl bg-slate-950/70 p-8 text-center text-slate-400">Loading jobs…</div>
-          ) : activeJobs.length === 0 ? (
-            <div className="rounded-3xl bg-slate-950/70 p-8 text-center text-slate-400">No active jobs.</div>
+            <div className="rounded-3xl bg-slate-950/70 p-8 text-center text-slate-400">Loading jobs�</div>
+          ) : filteredActiveJobs.length === 0 ? (
+            <div className="rounded-3xl bg-slate-950/70 p-8 text-center text-slate-400">{activeJobs.length === 0 ? 'No active jobs.' : 'No jobs match your filter.'}</div>
           ) : (
             <div className="space-y-6">
-              {activeJobs.map((job) => {
+              {filteredActiveJobs.map((job) => {
                 const total = calcInvoiceTotal(job.consumables || [], job.serviceFee);
                 const beforeReady = Boolean(job.beforePhotoUrl);
                 const afterReady = Boolean(job.afterPhotoUrl);
-                const canRequestSignoff = profile.role === 'tech' && job.status === 'Dispatched' && beforeReady && afterReady;
+                const canRequestSignoff = profile.role === 'tech' && ['Dispatched', 'On Site'].includes(job.status) && beforeReady && afterReady;
                 const canClientSignoff = profile.role === 'client' && job.status === 'Ready for Signoff' && !job.clientSignedOff;
 
                 return (
@@ -1493,7 +1583,7 @@ function App() {
                     <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                       <div>
                         <div className="flex items-center gap-2 text-xs uppercase tracking-[0.24em] text-slate-400 mb-3">
-                          <span className={`inline-flex rounded-full px-3 py-1 ${job.status === 'Completed' ? 'bg-emerald-500/10 text-emerald-300' : job.status === 'Ready for Signoff' ? 'bg-orange-500/10 text-orange-300' : 'bg-blue-500/10 text-blue-300'}`}>
+                          <span className={`inline-flex rounded-full px-3 py-1 ${job.status === 'Completed' ? 'bg-emerald-500/10 text-emerald-300' : job.status === 'Ready for Signoff' ? 'bg-orange-500/10 text-orange-300' : 'bg-teal-500/10 text-teal-300'}`}>
                             {job.status}
                           </span>
                           {profile.role === 'admin' && (
@@ -1706,7 +1796,7 @@ function App() {
                                 className="rounded-2xl border border-slate-700 bg-slate-900 px-4 py-3 text-slate-100"
                               />
                             </div>
-                            <button onClick={() => addConsumable(job)} className="w-full rounded-2xl bg-blue-600 px-4 py-3 text-white font-semibold hover:bg-blue-500 transition flex items-center justify-center gap-2">
+                            <button onClick={() => addConsumable(job)} className="w-full rounded-2xl bg-teal-600 px-4 py-3 text-white font-semibold hover:bg-teal-500 transition flex items-center justify-center gap-2">
                               <Plus size={16} /> Add consumable
                             </button>
                           </div>
@@ -1770,7 +1860,7 @@ function App() {
                             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-end">
                               {job.status !== 'Pending' && (
                                 profile.role === 'admin' || job.adminSignedOff ? (
-                                  <button onClick={() => generateInvoicePdf(job)} className="rounded-2xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-500 transition">
+                                  <button onClick={() => generateInvoicePdf(job)} className="rounded-2xl bg-teal-600 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-500 transition">
                                     Download invoice
                                   </button>
                                 ) : null
@@ -1812,7 +1902,30 @@ function App() {
                       <div className="space-y-2 text-slate-400 text-sm">
                         {job.clientPhone && <div>Phone: {job.clientPhone}</div>}
                         {job.clientEmail && <div>Email: {job.clientEmail}</div>}
-                        {job.checkInAt && <div>Check-in: {formatDate(job.checkInAt)} ({Number(job.checkInLat || 0).toFixed(5)}, {Number(job.checkInLng || 0).toFixed(5)})</div>}
+                        {job.checkInAt && <div>Check-in: {formatDate(job.checkInAt)}</div>}
+                        {job.checkInLat && job.checkInLng && (
+                          <div className="mt-2">
+                            <div className="text-xs text-slate-500 mb-1">Tech check-in location</div>
+                            <div className="rounded-2xl overflow-hidden border border-slate-600" style={{height: '180px'}}>
+                              <iframe
+                                title="Tech check-in location"
+                                width="100%"
+                                height="180"
+                                loading="lazy"
+                                src={`https://www.openstreetmap.org/export/embed.html?bbox=${job.checkInLng - 0.003},${job.checkInLat - 0.003},${job.checkInLng + 0.003},${job.checkInLat + 0.003}&layer=mapnik&marker=${job.checkInLat},${job.checkInLng}`}
+                                style={{border: 0, display: 'block'}}
+                              />
+                            </div>
+                            <a
+                              href={`https://www.google.com/maps?q=${job.checkInLat},${job.checkInLng}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-xs text-teal-400 hover:text-teal-300 mt-1 inline-block"
+                            >
+                              Open in Google Maps ?
+                            </a>
+                          </div>
+                        )}
                         {(job.breaks || []).map((brk, idx) => {
                           const durationMs = brk.endAt
                             ? (brk.endAt?.toDate ? brk.endAt.toDate() : new Date(brk.endAt)) - (brk.startAt?.toDate ? brk.startAt.toDate() : new Date(brk.startAt))
@@ -1821,13 +1934,13 @@ function App() {
                           const short = durationMin != null && durationMin < 30;
                           return (
                             <div key={idx} className={short ? 'text-red-400' : ''}>
-                              Break {idx + 1}: out {formatDate(brk.startAt)}{brk.endAt ? ` → back ${formatDate(brk.endAt)} (${durationMin} min${short ? ' ⚠ under 30 min' : ''})` : ' — on break'}
+                              Break {idx + 1}: out {formatDate(brk.startAt)}{brk.endAt ? ` ? back ${formatDate(brk.endAt)} (${durationMin} min${short ? ' ? under 30 min' : ''})` : ' � on break'}
                             </div>
                           );
                         })}
                         {job.checkOutAt && <div>Check-out: {formatDate(job.checkOutAt)} ({Number(job.checkOutLat || 0).toFixed(5)}, {Number(job.checkOutLng || 0).toFixed(5)})</div>}
                         {job.clientSignedOff && <div className="text-emerald-300">Client signed off</div>}
-                        {job.adminSignedOff && <div className="text-teal-300">Admin signed off{job.adminSignedOffAt ? ` · ${formatDate(job.adminSignedOffAt)}` : ''}</div>}
+                        {job.adminSignedOff && <div className="text-teal-300">Admin signed off{job.adminSignedOffAt ? ` � ${formatDate(job.adminSignedOffAt)}` : ''}</div>}
                       </div>
                       <div className="flex flex-wrap gap-3">
                         {profile.role === 'tech' && !job.checkInAt && (
@@ -1878,7 +1991,7 @@ function App() {
                             <CheckCircle size={16} /> Sign off work
                           </button>
                         )}
-                        {profile.role === 'admin' && job.status === 'Completed' && !job.adminSignedOff && (
+                        {profile.role === 'admin' && job.status === 'Ready for Signoff' && !job.adminSignedOff && (
                           <button onClick={() => adminSignOffWork(job)} className="rounded-2xl bg-teal-600 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-500 transition flex items-center gap-2">
                             <Shield size={16} /> Sign off work
                           </button>
@@ -1918,13 +2031,20 @@ function App() {
           </div>
           {showCompletedJobsPanel && (
             <div className="grid gap-6">
+              <input
+                type="text"
+                placeholder="Search client, location, task, tech�"
+                value={completedSearch}
+                onChange={(e) => setCompletedSearch(e.target.value)}
+                className="rounded-2xl bg-slate-800 border border-slate-600 px-4 py-2 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-teal-500"
+              />
               {loading ? (
-                <div className="rounded-3xl bg-slate-950/70 p-8 text-center text-slate-400">Loading jobs…</div>
-              ) : completedJobs.length === 0 ? (
-                <div className="rounded-3xl bg-slate-950/70 p-8 text-center text-slate-400">No completed jobs yet.</div>
+                <div className="rounded-3xl bg-slate-950/70 p-8 text-center text-slate-400">Loading jobs�</div>
+              ) : filteredCompletedJobs.length === 0 ? (
+                <div className="rounded-3xl bg-slate-950/70 p-8 text-center text-slate-400">{completedJobs.length === 0 ? 'No completed jobs yet.' : 'No jobs match your search.'}</div>
               ) : (
                 <div className="space-y-6">
-                  {completedJobs.map((job) => (
+                  {filteredCompletedJobs.map((job) => (
                     <div key={job.id} className="bg-slate-800 rounded-3xl border border-slate-700 p-5">
                       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                         <div>
@@ -1967,7 +2087,7 @@ function App() {
                             <span className="font-semibold text-slate-100">${calcInvoiceTotal(job.consumables || [], job.serviceFee).toFixed(2)}</span>
                           </div>
                           {(profile.role === 'admin' || job.adminSignedOff) && (
-                            <button onClick={() => generateInvoicePdf(job)} className="mt-2 rounded-2xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-500 transition">
+                            <button onClick={() => generateInvoicePdf(job)} className="mt-2 rounded-2xl bg-teal-600 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-500 transition">
                               Download invoice
                             </button>
                           )}
@@ -1979,8 +2099,31 @@ function App() {
                           {job.clientEmail && <div>Email: {job.clientEmail}</div>}
                           {job.checkInAt && <div>Check-in: {formatDate(job.checkInAt)}</div>}
                           {job.checkOutAt && <div>Check-out: {formatDate(job.checkOutAt)}</div>}
+                          {job.checkInLat && job.checkInLng && (
+                            <div className="mt-2">
+                              <div className="text-xs text-slate-500 mb-1">Tech check-in location</div>
+                              <div className="rounded-2xl overflow-hidden border border-slate-600" style={{height: '180px'}}>
+                                <iframe
+                                  title="Tech check-in location"
+                                  width="100%"
+                                  height="180"
+                                  loading="lazy"
+                                  src={`https://www.openstreetmap.org/export/embed.html?bbox=${job.checkInLng - 0.003},${job.checkInLat - 0.003},${job.checkInLng + 0.003},${job.checkInLat + 0.003}&layer=mapnik&marker=${job.checkInLat},${job.checkInLng}`}
+                                  style={{border: 0, display: 'block'}}
+                                />
+                              </div>
+                              <a
+                                href={`https://www.google.com/maps?q=${job.checkInLat},${job.checkInLng}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-xs text-teal-400 hover:text-teal-300 mt-1 inline-block"
+                              >
+                                Open in Google Maps ?
+                              </a>
+                            </div>
+                          )}
                           {job.clientSignedOff && <div className="text-emerald-300">Client signed off</div>}
-                          {job.adminSignedOff && <div className="text-teal-300">Admin signed off{job.adminSignedOffAt ? ` · ${formatDate(job.adminSignedOffAt)}` : ''}</div>}
+                          {job.adminSignedOff && <div className="text-teal-300">Admin signed off{job.adminSignedOffAt ? ` � ${formatDate(job.adminSignedOffAt)}` : ''}</div>}
                         </div>
                         <div className="flex flex-wrap gap-3">
                           {profile.role === 'admin' && !job.adminSignedOff && (
