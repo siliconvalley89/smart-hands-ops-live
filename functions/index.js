@@ -84,3 +84,47 @@ exports.notifyTechOnJobAssigned = onDocumentUpdated('jobs/{jobId}', async (event
   await sendDispatchNotification(event.params.jobId, after);
   return null;
 });
+// Fires on job creation — marks the assigned technician as busy using Admin SDK
+exports.manageTechStatusOnJobCreated = onDocumentCreated('jobs/{jobId}', async (event) => {
+  const job = event.data.data();
+  if (!job.assignedTechEmail) return null;
+  const db = admin.firestore();
+  const snap = await db.collection('technicians').where('email', '==', job.assignedTechEmail).limit(1).get();
+  if (!snap.empty) {
+    await snap.docs[0].ref.update({ status: 'busy', lastAssignedAt: new Date() });
+  }
+  return null;
+});
+
+// Fires on job update — syncs technician availability when assignment changes or job completes
+exports.manageTechStatusOnJobUpdated = onDocumentUpdated('jobs/{jobId}', async (event) => {
+  const before = event.data.before.data();
+  const after = event.data.after.data();
+  const db = admin.firestore();
+
+  const getTechDoc = async (email) => {
+    if (!email) return null;
+    const snap = await db.collection('technicians').where('email', '==', email).limit(1).get();
+    return snap.empty ? null : snap.docs[0];
+  };
+
+  // Technician reassigned to a different person
+  if (before.assignedTechEmail !== after.assignedTechEmail) {
+    if (before.assignedTechEmail) {
+      const oldDoc = await getTechDoc(before.assignedTechEmail);
+      if (oldDoc) await oldDoc.ref.update({ status: 'available' });
+    }
+    if (after.assignedTechEmail) {
+      const newDoc = await getTechDoc(after.assignedTechEmail);
+      if (newDoc) await newDoc.ref.update({ status: 'busy', lastAssignedAt: new Date() });
+    }
+  }
+
+  // Job completed — free up the technician
+  if (before.status !== 'Completed' && after.status === 'Completed' && after.assignedTechEmail) {
+    const techDoc = await getTechDoc(after.assignedTechEmail);
+    if (techDoc) await techDoc.ref.update({ status: 'available' });
+  }
+
+  return null;
+});

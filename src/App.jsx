@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect } from 'react';
+﻿import React, { useState, useEffect, useRef } from 'react';
 import { db, storage, auth, messaging, VAPID_KEY } from './firebase';
 import { collection, onSnapshot, addDoc, query, orderBy, deleteDoc, doc, updateDoc, getDocs, getDoc, setDoc, where } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
@@ -156,15 +156,19 @@ function App() {
   const [users, setUsers] = useState([]);
   const [userRoleEdits, setUserRoleEdits] = useState({});
   const [showAddUserPanel, setShowAddUserPanel] = useState(true);
-  const [showJobsPanel, setShowJobsPanel] = useState(true);
+  const [showJobsPanel, setShowJobsPanel] = useState(false);
+  const [showCompletedJobsPanel, setShowCompletedJobsPanel] = useState(false);
+  const [profilePhotoUploadBusy, setProfilePhotoUploadBusy] = useState(false);
   const [geoEventBusyJobId, setGeoEventBusyJobId] = useState(null);
   const [savedRoles, setSavedRoles] = useState({});
   const [requestFormOpen, setRequestFormOpen] = useState(true);
   const [editingJobId, setEditingJobId] = useState(null);
   const [jobEdits, setJobEdits] = useState({});
+  const suppressAuthStateRef = useRef(false);
 
   useEffect(() => {
     const authUnsub = onAuthStateChanged(auth, async (user) => {
+      if (suppressAuthStateRef.current) return;
       try {
         setFirebaseUser(user);
         if (user) {
@@ -428,7 +432,8 @@ function App() {
 
     try {
       const geo = await geocodeAddress(requestForm.location);
-      const nearest = await assignNearestTechnician(geo.lat, geo.lng);
+      // Find nearest available tech; Cloud Function marks them busy after job creation
+      const nearest = findNearestTechnician(geo.lat, geo.lng);
       await addDoc(collection(db, 'jobs'), {
         client: resolvedClientName,
         clientEmail: resolvedClientEmail,
@@ -513,7 +518,9 @@ function App() {
     }
     const adminEmail = profile?.email;
     const adminPassword = newAccount.adminPassword;
+    const adminUid = firebaseUser?.uid;
 
+    suppressAuthStateRef.current = true;
     try {
       const result = await createUserWithEmailAndPassword(auth, newAccount.email.trim(), newAccount.password.trim());
       const user = result.user;
@@ -543,6 +550,10 @@ function App() {
 
       await firebaseSignOut(auth);
       await signInWithEmailAndPassword(auth, adminEmail, adminPassword);
+      // Manually restore admin state — avoids UI flicker from onAuthStateChanged
+      const adminDocSnap = await getDoc(doc(db, 'users', adminUid));
+      setFirebaseUser(auth.currentUser);
+      if (adminDocSnap.exists()) setProfile({ id: adminDocSnap.id, ...adminDocSnap.data() });
       setAccountMessage(`${newAccount.role === 'tech' ? 'Technician' : 'Client'} account created successfully.`);
       setNewAccount({ name: '', email: '', password: '', role: 'tech', phone: '', location: '', adminPassword: '' });
     } catch (error) {
@@ -551,11 +562,16 @@ function App() {
         await firebaseSignOut(auth);
         if (adminEmail && adminPassword) {
           await signInWithEmailAndPassword(auth, adminEmail, adminPassword);
+          const adminDocSnap = await getDoc(doc(db, 'users', adminUid));
+          setFirebaseUser(auth.currentUser);
+          if (adminDocSnap.exists()) setProfile({ id: adminDocSnap.id, ...adminDocSnap.data() });
         }
       } catch (recoveryError) {
         console.error('Admin session recovery failed', recoveryError);
       }
       setAccountMessage(error.message || 'Unable to create account.');
+    } finally {
+      suppressAuthStateRef.current = false;
     }
   };
 
@@ -620,6 +636,17 @@ function App() {
     try {
       setGeoEventBusyJobId(job.id);
       const coords = await getCurrentCoordinates();
+
+      // Geofence: require tech to be within 1,000 ft of the job site for check-in / check-out
+      if ((eventType === 'checkIn' || eventType === 'checkOut') && job.lat != null && job.lng != null) {
+        const distMiles = calculateDistanceMiles(job.lat, job.lng, coords.lat, coords.lng);
+        const distFeet = Math.round(distMiles * 5280);
+        if (distFeet > 1000) {
+          setAppError(`You must be within 1,000 ft of the site to ${eventType === 'checkIn' ? 'check in' : 'check out'}. You are currently ${distFeet.toLocaleString()} ft away.`);
+          return;
+        }
+      }
+
       const payload = {
         updatedAt: new Date(),
       };
@@ -664,6 +691,8 @@ function App() {
 
   const updateUserRole = async (userItem) => {
     const nextRole = userRoleEdits[userItem.id] || userItem.role;
+    // Always lock the row to show 'Edit role' even if the selection didn't change
+    setSavedRoles((prev) => ({ ...prev, [userItem.id]: true }));
     if (!nextRole || nextRole === userItem.role) return;
 
     try {
@@ -686,10 +715,10 @@ function App() {
         }, { merge: true });
       }
 
-      setSavedRoles((prev) => ({ ...prev, [userItem.id]: true }));
       setAccountMessage(`Updated role for ${userItem.displayName || userItem.email}.`);
     } catch (error) {
       console.error('Update user role failed', error);
+      setSavedRoles((prev) => ({ ...prev, [userItem.id]: false }));
       setAccountMessage('Unable to update user role.');
     }
   };
@@ -855,6 +884,25 @@ function App() {
     }
   };
 
+  const handleProfilePhotoUpload = async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    event.target.value = '';
+    try {
+      setProfilePhotoUploadBusy(true);
+      const storageRef = ref(storage, `users/${firebaseUser.uid}/profile-photo`);
+      await uploadBytes(storageRef, file);
+      const url = await getDownloadURL(storageRef);
+      await updateDoc(doc(db, 'users', firebaseUser.uid), { profilePhotoUrl: url });
+      setProfile((prev) => ({ ...prev, profilePhotoUrl: url }));
+    } catch (error) {
+      console.error('Profile photo upload failed', error);
+      setAppError('Profile photo upload failed.');
+    } finally {
+      setProfilePhotoUploadBusy(false);
+    }
+  };
+
   const deletePhoto = async (jobId, type) => {
     try {
       await updateDoc(doc(db, 'jobs', jobId), {
@@ -932,20 +980,7 @@ function App() {
         assignedTechDistanceKm: distanceMiles,
         status: 'Dispatched',
       });
-
-      await updateDoc(doc(db, 'technicians', tech.id), {
-        status: 'busy',
-        lastAssignedAt: new Date(),
-      });
-
-      if (job.assignedTechEmail && job.assignedTechEmail !== tech.email) {
-        const previousTech = techs.find((item) => item.email === job.assignedTechEmail || item.name === job.assignedTechName);
-        if (previousTech && previousTech.status === 'busy') {
-          await updateDoc(doc(db, 'technicians', previousTech.id), {
-            status: 'available',
-          });
-        }
-      }
+      // Cloud Function (manageTechStatusOnJobUpdated) handles marking old/new tech busy/available
 
       setAppError('');
     } catch (error) {
@@ -965,6 +1000,9 @@ function App() {
   const openRequestForm = profile?.role === 'client';
   const canViewInvoice = profile?.role === 'admin' || profile?.role === 'client';
   const activeJobsCount = currentJobs.filter((job) => job.status !== 'Completed').length;
+  const completedJobsCount = currentJobs.filter((job) => job.status === 'Completed').length;
+  const activeJobs = currentJobs.filter((job) => job.status !== 'Completed');
+  const completedJobs = currentJobs.filter((job) => job.status === 'Completed');
 
   if (!authReady) {
     return (
@@ -1064,6 +1102,13 @@ function App() {
         <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
           <div className="flex items-center gap-3">
             <img src={logoPath} alt={APP_DISPLAY_NAME} className="h-10 w-auto rounded-lg" />
+            {profile.profilePhotoUrl ? (
+              <img src={profile.profilePhotoUrl} alt="Profile" className="h-9 w-9 rounded-full object-cover ring-2 ring-slate-600" />
+            ) : (
+              <div className="h-9 w-9 rounded-full bg-slate-700 flex items-center justify-center text-slate-300 text-sm font-bold select-none">
+                {(profile.displayName || '?')[0].toUpperCase()}
+              </div>
+            )}
             <div>
               <div className="text-slate-400 text-sm">Signed in as {profile.displayName}</div>
               <h1 className="text-xl font-bold">{APP_DISPLAY_NAME}</h1>
@@ -1082,15 +1127,35 @@ function App() {
           </div>
         )}
         <section className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div className="bg-slate-800 rounded-3xl border border-slate-700 p-5">
-            <div className="flex items-center gap-3 text-slate-400 uppercase tracking-[0.2em] text-xs">Role</div>
-            <div className="mt-4 text-4xl font-bold capitalize">{profile.role}</div>
-            <div className="mt-2 text-slate-400">Platform access level</div>
+          <div className={`rounded-3xl border p-5 ${(profile.role !== 'client' && !profile.profilePhotoUrl) ? 'bg-amber-900/20 border-amber-700' : 'bg-slate-800 border-slate-700'}`}>
+            <div className="flex items-center justify-between">
+              <div className="text-slate-400 uppercase tracking-[0.2em] text-xs">Role</div>
+              <label htmlFor="profile-photo-upload" className={`cursor-pointer inline-flex items-center gap-1 rounded-xl px-2 py-1 text-xs font-semibold transition ${profilePhotoUploadBusy ? 'opacity-60 cursor-not-allowed' : ''} ${(profile.role !== 'client' && !profile.profilePhotoUrl) ? 'bg-amber-600 hover:bg-amber-500 text-white' : 'border border-slate-600 bg-slate-700 hover:bg-slate-600 text-slate-300'}`}>
+                <Camera size={12} /> {profilePhotoUploadBusy ? 'Uploading...' : profile.profilePhotoUrl ? 'Change' : 'Upload photo'}
+              </label>
+              <input id="profile-photo-upload" type="file" className="hidden" accept="image/*" onChange={handleProfilePhotoUpload} disabled={profilePhotoUploadBusy} />
+            </div>
+            <div className="mt-4 flex items-center gap-4">
+              {profile.profilePhotoUrl ? (
+                <img src={profile.profilePhotoUrl} alt="Profile" className="h-14 w-14 rounded-full object-cover ring-2 ring-slate-600 shrink-0" />
+              ) : (
+                <div className={`h-14 w-14 rounded-full flex items-center justify-center text-xl font-bold select-none shrink-0 ${profile.role !== 'client' ? 'bg-amber-900/50 text-amber-300 ring-2 ring-amber-700' : 'bg-slate-700 text-slate-300'}`}>
+                  {(profile.displayName || '?')[0].toUpperCase()}
+                </div>
+              )}
+              <div>
+                <div className="text-3xl font-bold capitalize">{profile.role}</div>
+                <div className="mt-1 text-slate-400 text-sm">{profile.displayName}</div>
+              </div>
+            </div>
+            {profile.role !== 'client' && !profile.profilePhotoUrl && (
+              <div className="mt-2 text-amber-400 text-xs">Photo required</div>
+            )}
           </div>
           <div className="bg-slate-800 rounded-3xl border border-slate-700 p-5">
-            <div className="flex items-center gap-3 text-slate-400 uppercase tracking-[0.2em] text-xs">Visible jobs</div>
-            <div className="mt-4 text-4xl font-bold">{currentJobs.length}</div>
-            <div className="mt-2 text-slate-400">Jobs available to you</div>
+            <div className="flex items-center gap-3 text-slate-400 uppercase tracking-[0.2em] text-xs">Closed jobs</div>
+            <div className="mt-4 text-4xl font-bold">{completedJobsCount}</div>
+            <div className="mt-2 text-slate-400">Total completed jobs</div>
           </div>
           <div className="bg-slate-800 rounded-3xl border border-slate-700 p-5">
             <div className="flex items-center gap-3 text-slate-400 uppercase tracking-[0.2em] text-xs">Open jobs</div>
@@ -1396,8 +1461,8 @@ function App() {
         <section className="grid gap-4">
           <div className="flex items-center justify-between rounded-3xl bg-slate-800 border border-slate-700 p-4">
             <div>
-              <h2 className="text-xl font-semibold text-white">Dispatched jobs</h2>
-              <p className="text-slate-400 text-sm mt-1">Expand this section when actively working jobs.</p>
+              <h2 className="text-xl font-semibold text-white">Active jobs</h2>
+              <p className="text-slate-400 text-sm mt-1">Jobs currently in progress or awaiting dispatch.</p>
             </div>
             <button
               type="button"
@@ -1412,11 +1477,11 @@ function App() {
           <div className="grid gap-6">
           {loading ? (
             <div className="rounded-3xl bg-slate-950/70 p-8 text-center text-slate-400">Loading jobs…</div>
-          ) : currentJobs.length === 0 ? (
-            <div className="rounded-3xl bg-slate-950/70 p-8 text-center text-slate-400">No jobs found.</div>
+          ) : activeJobs.length === 0 ? (
+            <div className="rounded-3xl bg-slate-950/70 p-8 text-center text-slate-400">No active jobs.</div>
           ) : (
             <div className="space-y-6">
-              {currentJobs.map((job) => {
+              {activeJobs.map((job) => {
                 const total = calcInvoiceTotal(job.consumables || [], job.serviceFee);
                 const beforeReady = Boolean(job.beforePhotoUrl);
                 const afterReady = Boolean(job.afterPhotoUrl);
@@ -1702,15 +1767,12 @@ function App() {
                               <span>Total</span>
                               <span className="font-semibold text-slate-100">${total.toFixed(2)}</span>
                             </div>
-                            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                              <div className="text-slate-500 text-xs">Only admin and client see invoice amounts.</div>
+                            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-end">
                               {job.status !== 'Pending' && (
                                 profile.role === 'admin' || job.adminSignedOff ? (
                                   <button onClick={() => generateInvoicePdf(job)} className="rounded-2xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-500 transition">
                                     Download invoice
                                   </button>
-                                ) : profile.role === 'client' ? (
-                                  <div className="text-slate-500 text-xs italic">Invoice locked until admin signs off.</div>
                                 ) : null
                               )}
                             </div>
@@ -1837,6 +1899,110 @@ function App() {
             </div>
           )}
           </div>
+          )}
+        </section>
+
+        <section className="grid gap-4">
+          <div className="flex items-center justify-between rounded-3xl bg-slate-800 border border-slate-700 p-4">
+            <div>
+              <h2 className="text-xl font-semibold text-white">Completed jobs</h2>
+              <p className="text-slate-400 text-sm mt-1">Jobs that have been signed off and closed.</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowCompletedJobsPanel((prev) => !prev)}
+              className="rounded-2xl border border-slate-600 px-4 py-2 text-sm text-slate-200 hover:bg-slate-800 transition"
+            >
+              {showCompletedJobsPanel ? 'Collapse' : 'Expand'}
+            </button>
+          </div>
+          {showCompletedJobsPanel && (
+            <div className="grid gap-6">
+              {loading ? (
+                <div className="rounded-3xl bg-slate-950/70 p-8 text-center text-slate-400">Loading jobs…</div>
+              ) : completedJobs.length === 0 ? (
+                <div className="rounded-3xl bg-slate-950/70 p-8 text-center text-slate-400">No completed jobs yet.</div>
+              ) : (
+                <div className="space-y-6">
+                  {completedJobs.map((job) => (
+                    <div key={job.id} className="bg-slate-800 rounded-3xl border border-slate-700 p-5">
+                      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                        <div>
+                          <div className="flex items-center gap-2 text-xs uppercase tracking-[0.24em] text-slate-400 mb-3">
+                            <span className="inline-flex rounded-full px-3 py-1 bg-emerald-500/10 text-emerald-300">{job.status}</span>
+                          </div>
+                          <h2 className="text-xl font-semibold text-white">{job.client}</h2>
+                          <p className="text-slate-400 mt-2">{job.location}</p>
+                          <p className="text-slate-300 mt-3">{job.task}</p>
+                          {job.serialNumber && <p className="text-slate-300 mt-2 font-mono text-sm">S/N: <span className="text-amber-300">{job.serialNumber}</span></p>}
+                          {job.details && <p className="text-slate-400 mt-2">{job.details}</p>}
+                        </div>
+                        <div className="space-y-2 text-right">
+                          <div className="text-slate-400 text-sm">Assigned tech</div>
+                          <div className="font-semibold">{job.assignedTechName || 'Unassigned'}</div>
+                          <div className="text-slate-400 text-sm mt-3">Completed</div>
+                          <div className="text-slate-200 text-sm">{formatDate(job.completedAt || job.createdAt)}</div>
+                        </div>
+                      </div>
+                      {(job.beforePhotoUrl || job.afterPhotoUrl) && (
+                        <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-4">
+                          {job.beforePhotoUrl && (
+                            <div className="rounded-2xl bg-slate-900 p-3 border border-slate-700">
+                              <div className="text-slate-300 text-sm mb-2">Before photo</div>
+                              <img src={job.beforePhotoUrl} alt="Before" className="w-full rounded-2xl object-cover" />
+                            </div>
+                          )}
+                          {job.afterPhotoUrl && (
+                            <div className="rounded-2xl bg-slate-900 p-3 border border-slate-700">
+                              <div className="text-slate-300 text-sm mb-2">After photo</div>
+                              <img src={job.afterPhotoUrl} alt="After" className="w-full rounded-2xl object-cover" />
+                            </div>
+                          )}
+                        </div>
+                      )}
+                      {canViewInvoice && (
+                        <div className="mt-6 rounded-2xl bg-slate-900 p-4 border border-slate-700">
+                          <div className="flex items-center justify-between text-slate-400 text-sm mb-2">
+                            <span>Total</span>
+                            <span className="font-semibold text-slate-100">${calcInvoiceTotal(job.consumables || [], job.serviceFee).toFixed(2)}</span>
+                          </div>
+                          {(profile.role === 'admin' || job.adminSignedOff) && (
+                            <button onClick={() => generateInvoicePdf(job)} className="mt-2 rounded-2xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-500 transition">
+                              Download invoice
+                            </button>
+                          )}
+                        </div>
+                      )}
+                      <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                        <div className="space-y-2 text-slate-400 text-sm">
+                          {job.clientPhone && <div>Phone: {job.clientPhone}</div>}
+                          {job.clientEmail && <div>Email: {job.clientEmail}</div>}
+                          {job.checkInAt && <div>Check-in: {formatDate(job.checkInAt)}</div>}
+                          {job.checkOutAt && <div>Check-out: {formatDate(job.checkOutAt)}</div>}
+                          {job.clientSignedOff && <div className="text-emerald-300">Client signed off</div>}
+                          {job.adminSignedOff && <div className="text-teal-300">Admin signed off{job.adminSignedOffAt ? ` · ${formatDate(job.adminSignedOffAt)}` : ''}</div>}
+                        </div>
+                        <div className="flex flex-wrap gap-3">
+                          {profile.role === 'admin' && !job.adminSignedOff && (
+                            <button onClick={() => adminSignOffWork(job)} className="rounded-2xl bg-teal-600 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-500 transition flex items-center gap-2">
+                              <Shield size={16} /> Sign off work
+                            </button>
+                          )}
+                          {profile.role === 'admin' && job.adminSignedOff && (
+                            <div className="rounded-2xl bg-teal-500/10 px-4 py-2 text-sm text-teal-200 flex items-center gap-2"><Shield size={14} /> Admin signed off</div>
+                          )}
+                          {profile.role === 'admin' && (
+                            <button onClick={() => handleDelete(job.id)} className="rounded-2xl bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-500 transition flex items-center gap-2">
+                              <Trash2 size={16} /> Delete
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           )}
         </section>
       </main>
