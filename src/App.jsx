@@ -45,6 +45,56 @@ const calcInvoiceTotal = (items = [], serviceFee = 0) => {
 const APP_DISPLAY_NAME = 'SV Smart Dispatch';
 const BUSINESS_NAME = 'Silicon Valley Smart Hands LLC';
 
+const legalContent = {
+  terms: {
+    title: 'Terms and Conditions',
+    body: 'Use of SV Smart Dispatch is subject to these terms. You agree to provide accurate request and account information, keep your login credentials secure, and use the service only for lawful business purposes. Service availability, scheduling, pricing, and job completion are subject to confirmation by Silicon Valley Smart Hands LLC.',
+  },
+  sms: {
+    title: 'SMS Consent',
+    body: 'By providing your phone number and submitting a service request, you consent to receive service-related text messages from Silicon Valley Smart Hands LLC, including scheduling updates, technician arrival notices, and job status messages. Message frequency varies. Message and data rates may apply. Reply STOP to opt out or HELP for help. Consent is not a condition of purchase, and you can withdraw it at any time.',
+  },
+  privacy: {
+    title: 'Privacy Policy',
+    body: 'We collect the information needed to manage service requests, accounts, scheduling, payments, and communications. We use it to provide and improve our services, protect accounts, and communicate about requested work. We do not sell personal information. We may share information with service providers when needed to operate the service or comply with the law. Contact Silicon Valley Smart Hands LLC with privacy questions or requests.',
+  },
+};
+
+function LegalFooter() {
+  const [activeDocument, setActiveDocument] = useState(null);
+
+  return (
+    <>
+      <footer className="border-t border-slate-700 bg-slate-950 px-4 py-6 text-center text-sm text-slate-400">
+        <div className="flex flex-wrap items-center justify-center gap-x-5 gap-y-2">
+          <button type="button" onClick={() => setActiveDocument('terms')} className="hover:text-white transition">Terms and Conditions</button>
+          <button type="button" onClick={() => setActiveDocument('sms')} className="hover:text-white transition">SMS Consent</button>
+          <button type="button" onClick={() => setActiveDocument('privacy')} className="hover:text-white transition">Privacy Policy</button>
+        </div>
+        <p className="mt-3 text-xs text-slate-500">(c) {new Date().getFullYear()} {BUSINESS_NAME}</p>
+      </footer>
+
+      {activeDocument && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 p-4" role="presentation" onClick={() => setActiveDocument(null)}>
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="legal-document-title"
+            className="w-full max-w-2xl rounded-3xl border border-slate-700 bg-slate-900 p-6 text-left shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-4">
+              <h2 id="legal-document-title" className="text-xl font-bold text-white">{legalContent[activeDocument].title}</h2>
+              <button type="button" onClick={() => setActiveDocument(null)} className="text-slate-400 hover:text-white" aria-label="Close legal document">Close</button>
+            </div>
+            <p className="mt-5 leading-7 text-slate-300">{legalContent[activeDocument].body}</p>
+          </section>
+        </div>
+      )}
+    </>
+  );
+}
+
 const loadImageDataUrl = async (url) => {
   const response = await fetch(url);
   const blob = await response.blob();
@@ -2149,6 +2199,7 @@ function App() {
           )}
         </section>
       </main>
+      <LegalFooter />
     </div>
   );
 }
