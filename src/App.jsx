@@ -42,13 +42,13 @@ const calcInvoiceTotal = (items = [], serviceFee = 0) => {
   return items.reduce((sum, item) => sum + (Number(item.qty || 0) * Number(item.unitPrice || 0)), 0) + Number(serviceFee || 0);
 };
 
-const APP_DISPLAY_NAME = 'SV Smart Dispatch';
+const APP_DISPLAY_NAME = 'SV Smart Aide';
 const BUSINESS_NAME = 'Silicon Valley Smart Hands LLC';
 
 const legalContent = {
   terms: {
     title: 'Terms and Conditions',
-    body: 'Use of SV Smart Dispatch is subject to these terms. You agree to provide accurate request and account information, keep your login credentials secure, and use the service only for lawful business purposes. Service availability, scheduling, pricing, and job completion are subject to confirmation by Silicon Valley Smart Hands LLC.',
+    body: 'Use of SV Smart Aide is subject to these terms. You agree to provide accurate request and account information, keep your login credentials secure, and use the service only for lawful business purposes. Service availability, scheduling, pricing, and job completion are subject to confirmation by Silicon Valley Smart Hands LLC.',
   },
   sms: {
     title: 'SMS Consent',
@@ -106,7 +106,7 @@ const loadImageDataUrl = async (url) => {
   });
 };
 
-const generateInvoicePdf = async (job) => {
+const generateInvoicePdf = async (job, onError) => {
   try {
     const { jsPDF } = await import('jspdf');
     const doc = new jsPDF({ unit: 'pt', format: 'letter' });
@@ -161,7 +161,7 @@ const generateInvoicePdf = async (job) => {
     });
   } catch (error) {
     console.error('Invoice generation failed', error);
-    setAppError('Unable to generate invoice PDF.');
+    onError('Unable to generate invoice PDF.');
   }
 };
 
@@ -193,8 +193,6 @@ function App() {
   const [requestForm, setRequestForm] = useState({ name: '', email: '', phone: '', location: '', service: '', details: '', serialNumber: '', scheduledFor: '' });
   const [requestSuccess, setRequestSuccess] = useState('');
   const [requestError, setRequestError] = useState('');
-  const [newTech, setNewTech] = useState({ name: '', email: '', phone: '', location: '' });
-  const [techMessage, setTechMessage] = useState('');
   const [newConsumable, setNewConsumable] = useState({ description: '', qty: 1, unitPrice: '' });
   const [serviceFeeInputs, setServiceFeeInputs] = useState({});
   const [consumableEdits, setConsumableEdits] = useState({});
@@ -202,7 +200,6 @@ function App() {
   const [accountMessage, setAccountMessage] = useState('');
   const [passwordForm, setPasswordForm] = useState({ current: '', next: '', confirm: '' });
   const [passwordMessage, setPasswordMessage] = useState('');
-  const [passwordSectionHidden, setPasswordSectionHidden] = useState(false);
   const [assignments, setAssignments] = useState({});
   const [users, setUsers] = useState([]);
   const [userRoleEdits, setUserRoleEdits] = useState({});
@@ -297,7 +294,7 @@ function App() {
   }, [firebaseUser]);
 
   useEffect(() => {
-    if (!profile) {
+    if (!profile?.role) {
       setJobs([]);
       setLoading(false);
       return () => {};
@@ -477,13 +474,6 @@ function App() {
     }, null);
   };
 
-  const assignNearestTechnician = async (clientLat, clientLng) => {
-    const nearest = findNearestTechnician(clientLat, clientLng);
-    if (!nearest) return null;
-    await updateDoc(doc(db, 'technicians', nearest.id), { status: 'busy', lastAssignedAt: new Date() });
-    return nearest;
-  };
-
   const submitRequest = async (event) => {
     event.preventDefault();
     setRequestError('');
@@ -545,35 +535,6 @@ function App() {
     } catch (error) {
       console.error('Submit request failed', error);
       setRequestError(error.message || 'Failed to submit request.');
-    }
-  };
-
-  const addTechnician = async (event) => {
-    event.preventDefault();
-    setTechMessage('');
-    if (!newTech.name || !newTech.email || !newTech.location) {
-      setTechMessage('Please enter name, email, and location.');
-      return;
-    }
-
-    try {
-      const geo = await geocodeAddress(newTech.location);
-      await addDoc(collection(db, 'technicians'), {
-        name: newTech.name,
-        email: newTech.email,
-        phone: newTech.phone,
-        location: geo.displayName,
-        rawLocation: newTech.location,
-        lat: geo.lat,
-        lng: geo.lng,
-        status: 'available',
-        createdAt: new Date(),
-      });
-      setNewTech({ name: '', email: '', phone: '', location: '' });
-      setTechMessage('Technician added and ready for dispatch.');
-    } catch (error) {
-      console.error('Add technician failed', error);
-      setTechMessage('Could not add technician. Please check the location.');
     }
   };
 
@@ -676,7 +637,6 @@ function App() {
       setProfile((prev) => ({ ...prev, mustChangePassword: false }));
       setPasswordForm({ current: '', next: '', confirm: '' });
       setPasswordMessage('Password updated successfully.');
-      setPasswordSectionHidden(true);
     } catch (error) {
       console.error('Password update failed', error);
       setPasswordMessage('Unable to update password. Verify your current password and try again.');
@@ -1071,7 +1031,6 @@ function App() {
         : jobs.filter((job) => job.clientEmail === (profile.email || firebaseUser?.email))
     : [];
 
-  const openRequestForm = profile?.role === 'client';
   const canViewInvoice = profile?.role === 'admin' || profile?.role === 'client';
   const activeJobsCount = currentJobs.filter((job) => job.status !== 'Completed').length;
   const completedJobsCount = currentJobs.filter((job) => job.status === 'Completed').length;
@@ -1688,7 +1647,10 @@ function App() {
 
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-6">
                       <div className="rounded-3xl bg-slate-950/40 border border-slate-700 p-4">
-                        <div className="flex items-center gap-2 text-sm text-slate-400 uppercase tracking-[0.18em] mb-4"><Camera size={16} /> Job photos</div>
+                        <div className="flex items-center gap-2 text-sm text-slate-400 uppercase tracking-[0.18em] mb-4">
+                          <Camera size={16} /> Job photos
+                          {uploadingId === job.id && <span className="text-teal-300 normal-case tracking-normal">Uploading photo...</span>}
+                        </div>
                         <div className="grid gap-3">
                           <div className="rounded-2xl bg-slate-900 p-3 border border-slate-700">
                             <div className="text-slate-300 text-sm mb-2">Before photo</div>
@@ -1910,7 +1872,7 @@ function App() {
                             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-end">
                               {job.status !== 'Pending' && (
                                 profile.role === 'admin' || job.adminSignedOff ? (
-                                  <button onClick={() => generateInvoicePdf(job)} className="rounded-2xl bg-teal-600 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-500 transition">
+                                  <button onClick={() => generateInvoicePdf(job, setAppError)} className="rounded-2xl bg-teal-600 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-500 transition">
                                     Download invoice
                                   </button>
                                 ) : null
@@ -2137,7 +2099,7 @@ function App() {
                             <span className="font-semibold text-slate-100">${calcInvoiceTotal(job.consumables || [], job.serviceFee).toFixed(2)}</span>
                           </div>
                           {(profile.role === 'admin' || job.adminSignedOff) && (
-                            <button onClick={() => generateInvoicePdf(job)} className="mt-2 rounded-2xl bg-teal-600 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-500 transition">
+                            <button onClick={() => generateInvoicePdf(job, setAppError)} className="mt-2 rounded-2xl bg-teal-600 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-500 transition">
                               Download invoice
                             </button>
                           )}
