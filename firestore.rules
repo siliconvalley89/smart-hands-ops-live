@@ -13,6 +13,10 @@ service cloud.firestore {
       return isSignedIn() && getUserRole() == 'admin';
     }
 
+    function isAdminAssistant() {
+      return isSignedIn() && getUserRole() == 'adminAssistant';
+    }
+
     function isTech() {
       return isSignedIn() && getUserRole() == 'tech';
     }
@@ -53,17 +57,31 @@ service cloud.firestore {
     match /jobs/{jobId} {
       allow read: if isSignedIn() && (
         isAdmin() ||
+        (isAdminAssistant() && resource.data.status != 'Completed') ||
         resource.data.clientEmail == request.auth.token.email ||
         resource.data.assignedTechEmail == request.auth.token.email
       );
 
       allow create: if isSignedIn() && (
         isAdmin() ||
+        // Assistants can create jobs for clients, but never with billing data or a closed status
+        (isAdminAssistant() &&
+          request.resource.data.status in ['Pending', 'Dispatched'] &&
+          request.resource.data.get('serviceFee', 0) == 0 &&
+          request.resource.data.get('consumables', []).size() == 0 &&
+          request.resource.data.get('invoiceSent', false) == false) ||
         (isClient() && request.resource.data.clientEmail == request.auth.token.email)
       );
 
       allow update: if isSignedIn() && (
         isAdmin() ||
+        // Assistants can only assign/reassign technicians on open jobs
+        (isAdminAssistant() && resource.data.status != 'Completed' &&
+          request.resource.data.status in ['Pending', 'Dispatched', 'On Site'] &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'assignedTechName', 'assignedTechEmail', 'assignedTechDistanceMiles',
+            'assignedTechDistanceKm', 'status', 'updatedAt'
+          ])) ||
         (isTech() && resource.data.assignedTechEmail == request.auth.token.email) ||
         // Clients can only set clientSignedOff on their own jobs; no other fields
         (isClient() && resource.data.clientEmail == request.auth.token.email &&

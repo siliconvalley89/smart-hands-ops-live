@@ -303,7 +303,7 @@ function App() {
     setLoading(true);
 
     let jobsQuery;
-    if (profile.role === 'admin') {
+    if (profile.role === 'admin' || profile.role === 'adminAssistant') {
       jobsQuery = query(collection(db, 'jobs'), orderBy('createdAt', 'desc'));
     } else if (profile.role === 'tech') {
       jobsQuery = query(collection(db, 'jobs'), where('assignedTechEmail', '==', profile.email || firebaseUser?.email || ''));
@@ -541,7 +541,7 @@ function App() {
   const createAccount = async () => {
     setAccountMessage('');
     if (!newAccount.name || !newAccount.email || !newAccount.password || !newAccount.role || !newAccount.adminPassword) {
-      setAccountMessage('Please fill all required account fields, including your admin password.');
+      setAccountMessage('Please fill all required account fields, including your own password.');
       return;
     }
     if (newAccount.role === 'tech' && !newAccount.location) {
@@ -1023,8 +1023,13 @@ function App() {
     }
   };
 
+  const isAdmin = profile?.role === 'admin';
+  const isAssistant = profile?.role === 'adminAssistant';
+  const canStaffManage = isAdmin || isAssistant;
+  const roleLabel = isAssistant ? 'Admin Assistant' : profile?.role;
+
   const currentJobs = profile
-    ? profile.role === 'admin'
+    ? canStaffManage
       ? jobs
       : profile.role === 'tech'
         ? jobs.filter((job) => job.assignedTechEmail === (profile.email || firebaseUser?.email))
@@ -1219,7 +1224,7 @@ function App() {
                 </div>
               )}
               <div>
-                <div className="text-3xl font-bold capitalize">{profile.role}</div>
+                <div className="text-3xl font-bold capitalize">{roleLabel}</div>
                 <div className="mt-1 text-slate-400 text-sm">{profile.displayName}</div>
               </div>
             </div>
@@ -1227,11 +1232,13 @@ function App() {
               <div className="mt-2 text-amber-400 text-xs">Photo required</div>
             )}
           </div>
+          {!isAssistant && (
           <div className="bg-slate-800 rounded-3xl border border-slate-700 p-5">
             <div className="flex items-center gap-3 text-slate-400 uppercase tracking-[0.2em] text-xs">Closed jobs</div>
             <div className="mt-4 text-4xl font-bold">{completedJobsCount}</div>
             <div className="mt-2 text-slate-400">Total completed jobs</div>
           </div>
+          )}
           <div className="bg-slate-800 rounded-3xl border border-slate-700 p-5">
             <div className="flex items-center gap-3 text-slate-400 uppercase tracking-[0.2em] text-xs">Open jobs</div>
             <div className="mt-4 text-4xl font-bold">{activeJobsCount}</div>
@@ -1275,7 +1282,7 @@ function App() {
           </section>
         )}
 
-        {(profile.role === 'admin' || profile.role === 'client') && (
+        {(canStaffManage || profile.role === 'client') && (
           <section className="bg-slate-800 rounded-3xl border border-slate-700 p-5">
             <div className="flex items-center justify-between mb-4">
               <div className="flex items-center gap-3 text-lg font-semibold"><Calendar size={20} /> {profile.role === 'client' ? 'Request service' : 'Client request form'}</div>
@@ -1372,7 +1379,7 @@ function App() {
           </section>
         )}
 
-        {profile.role === 'admin' && (
+        {canStaffManage && (
           <>
           <section className="rounded-3xl bg-slate-950/60 border border-slate-700 p-6 grid gap-6">
             <div className="flex items-center justify-between gap-4">
@@ -1450,11 +1457,11 @@ function App() {
                 type="password"
                 value={newAccount.adminPassword}
                 onChange={(e) => setNewAccount((prev) => ({ ...prev, adminPassword: e.target.value }))}
-                placeholder="Your admin password"
+                placeholder="Your own password"
                 className="w-full rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3 text-slate-100"
               />
               <div className="rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3 text-slate-400 flex items-center">
-                This is required to restore your admin session after creating the new account.
+                This is required to restore your session after creating the new account.
               </div>
             </div>
 
@@ -1464,6 +1471,7 @@ function App() {
             </button>
           </section>
 
+          {isAdmin && (
           <section className="rounded-3xl bg-slate-950/60 border border-slate-700 p-6 grid gap-4">
             <div>
               <h2 className="text-xl font-semibold text-white">Existing users</h2>
@@ -1490,6 +1498,7 @@ function App() {
                         className="w-full rounded-2xl border border-slate-700 bg-slate-950 px-4 py-2 text-slate-100"
                       >
                         <option value="admin">Admin</option>
+                        <option value="adminAssistant">Admin Assistant</option>
                         <option value="tech">Technician</option>
                         <option value="client">Client</option>
                       </select>
@@ -1527,6 +1536,7 @@ function App() {
               </div>
             )}
           </section>
+          )}
               </>
             )}
           </section>
@@ -1813,7 +1823,7 @@ function App() {
                             </button>
                           </div>
                         )}
-                        {(job.serviceFee || job.serviceFee === 0) && profile?.role !== 'tech' && (
+                        {(job.serviceFee || job.serviceFee === 0) && canViewInvoice && (
                           <div className="mt-4 rounded-2xl bg-slate-900 p-3 border border-slate-700 text-slate-200">
                             <div className="text-slate-400 text-sm">Service fee</div>
                             <div className="font-semibold text-slate-100">${Number(job.serviceFee || 0).toFixed(2)}</div>
@@ -1880,7 +1890,7 @@ function App() {
                             </div>
                           </div>
                         )}
-                        {profile.role === 'admin' && job.status !== 'Completed' && (
+                        {canStaffManage && job.status !== 'Completed' && (
                           <div className="mt-4 rounded-2xl bg-slate-950/80 border border-slate-700 p-4">
                             <div className="text-slate-400 text-sm mb-3">Assign or reassign technician</div>
                             <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
@@ -2027,6 +2037,7 @@ function App() {
           )}
         </section>
 
+        {!isAssistant && (
         <section className="grid gap-4">
           <div className="flex items-center justify-between rounded-3xl bg-slate-800 border border-slate-700 p-4">
             <div>
@@ -2160,6 +2171,7 @@ function App() {
             </div>
           )}
         </section>
+        )}
       </main>
       <LegalFooter />
     </div>
