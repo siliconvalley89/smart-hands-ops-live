@@ -245,6 +245,7 @@ function App() {
   const [userRoleEdits, setUserRoleEdits] = useState({});
   const [showAddUserPanel, setShowAddUserPanel] = useState(false);
   const [showUsersPanel, setShowUsersPanel] = useState(false);
+  const [expandedJobIds, setExpandedJobIds] = useState([]);
   const [showJobsPanel, setShowJobsPanel] = useState(false);
   const [showCompletedJobsPanel, setShowCompletedJobsPanel] = useState(false);
   const [jobSearch, setJobSearch] = useState('');
@@ -485,6 +486,7 @@ function App() {
   const logout = async () => {
     setShowAddUserPanel(false);
     setShowUsersPanel(false);
+    setExpandedJobIds([]);
     setShowJobsPanel(false);
     setShowCompletedJobsPanel(false);
     setRequestFormOpen(false);
@@ -1680,11 +1682,35 @@ function App() {
                 const canRequestSignoff = profile.role === 'tech' && ['Assigned', 'Dispatched', 'En Route', 'On Site'].includes(job.status) && beforeReady && afterReady;
                 const canClientSignoff = profile.role === 'client' && job.status === 'Ready for Signoff' && !job.clientSignedOff;
 
+                const isExpanded = expandedJobIds.includes(job.id);
+                const toggleExpanded = () => setExpandedJobIds((prev) => (prev.includes(job.id) ? prev.filter((id) => id !== job.id) : [...prev, job.id]));
+
+                if (!isExpanded) {
+                  return (
+                    <button
+                      key={job.id}
+                      type="button"
+                      onClick={toggleExpanded}
+                      className="w-full text-left bg-slate-800 rounded-2xl border border-slate-700 px-5 py-3 hover:bg-slate-700/60 transition flex flex-wrap items-center gap-x-4 gap-y-1"
+                    >
+                      <span className={`inline-flex rounded-full px-3 py-1 text-xs uppercase tracking-[0.2em] ${job.status === 'Ready for Signoff' ? 'bg-orange-500/10 text-orange-300' : 'bg-teal-500/10 text-teal-300'}`}>
+                        {getJobStatusLabel(job)}
+                      </span>
+                      <span className="font-semibold text-white">{job.client}</span>
+                      <span className="text-slate-300 text-sm truncate max-w-xs">{job.task}</span>
+                      <span className="text-slate-400 text-sm">{job.assignedTechName || 'Unassigned'}</span>
+                      {job.scheduledFor && <span className="text-amber-300 text-sm">{formatDate(job.scheduledFor)}</span>}
+                      <span className="ml-auto text-xs text-slate-400">Expand</span>
+                    </button>
+                  );
+                }
+
                 return (
                   <div key={job.id} className="bg-slate-800 rounded-3xl border border-slate-700 p-5">
                     <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                       <div>
                         <div className="flex items-center gap-2 text-xs uppercase tracking-[0.24em] text-slate-400 mb-3">
+                          <button type="button" onClick={toggleExpanded} className="mr-2 rounded-xl border border-slate-600 px-2 py-1 text-xs normal-case tracking-normal text-slate-300 hover:bg-slate-700 transition">Collapse</button>
                           <span className={`inline-flex rounded-full px-3 py-1 ${job.status === 'Completed' ? 'bg-emerald-500/10 text-emerald-300' : job.status === 'Ready for Signoff' ? 'bg-orange-500/10 text-orange-300' : 'bg-teal-500/10 text-teal-300'}`}>
                             {getJobStatusLabel(job)}
                           </span>
