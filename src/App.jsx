@@ -59,11 +59,27 @@ const isJobAssigned = (job) =>
 const getJobStatusLabel = (job) => (isJobAssigned(job) && job.status === 'Dispatched' ? 'Assigned' : job.status);
 
 // Returns the time window a job occupies, or null if it is unscheduled and not in progress
+// Window uses the explicit end time when set, otherwise a default length
 const getJobWindow = (job, now = Date.now()) => {
   const scheduled = toMillis(job.scheduledFor);
-  if (scheduled != null) return { start: scheduled, end: scheduled + JOB_WINDOW_MS };
+  if (scheduled != null) {
+    const end = toMillis(job.scheduledEnd);
+    return { start: scheduled, end: end != null && end > scheduled ? end : scheduled + JOB_WINDOW_MS };
+  }
   if (isJobDispatched(job)) return { start: now, end: now + JOB_WINDOW_MS };
   return null;
+};
+
+// e.g. "10/19/2026 1000-1800" (or just date and start time when no end time was set)
+const formatSchedule = (job) => {
+  const start = toMillis(job.scheduledFor);
+  if (start == null) return '';
+  const pad = (n) => String(n).padStart(2, '0');
+  const s = new Date(start);
+  const hhmm = (d) => `${pad(d.getHours())}${pad(d.getMinutes())}`;
+  const datePart = s.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' });
+  const end = toMillis(job.scheduledEnd);
+  return `${datePart} ${hhmm(s)}${end != null ? `-${hhmm(new Date(end))}` : ''}`;
 };
 
 const findTechConflict = (targetJob, techEmail, allJobs) => {
@@ -230,7 +246,7 @@ function App() {
   const [techs, setTechs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [uploadingId, setUploadingId] = useState(null);
-  const [requestForm, setRequestForm] = useState({ name: '', email: '', phone: '', location: '', service: '', details: '', serialNumber: '', scheduledFor: '' });
+  const [requestForm, setRequestForm] = useState({ name: '', email: '', phone: '', location: '', service: '', details: '', serialNumber: '', scheduledFor: '', scheduledEndTime: '' });
   const [requestSuccess, setRequestSuccess] = useState('');
   const [requestError, setRequestError] = useState('');
   const [newConsumable, setNewConsumable] = useState({ description: '', qty: 1, unitPrice: '' });
@@ -602,7 +618,17 @@ function App() {
       const geo = await geocodeAddress(requestForm.location);
       // Auto-assign the nearest tech with no overlapping job; techs are only marked busy once en route / on site
       const scheduledDate = requestForm.scheduledFor ? new Date(requestForm.scheduledFor) : null;
-      const nearest = findNearestTechnician(geo.lat, geo.lng, { scheduledFor: scheduledDate });
+      let scheduledEndDate = null;
+      if (scheduledDate && requestForm.scheduledEndTime) {
+        const [h, m] = requestForm.scheduledEndTime.split(':').map(Number);
+        scheduledEndDate = new Date(scheduledDate);
+        scheduledEndDate.setHours(h, m, 0, 0);
+        if (scheduledEndDate <= scheduledDate) {
+          setRequestError('End time must be after the start time.');
+          return;
+        }
+      }
+      const nearest = findNearestTechnician(geo.lat, geo.lng, { scheduledFor: scheduledDate, scheduledEnd: scheduledEndDate });
       await addDoc(collection(db, 'jobs'), {
         client: resolvedClientName,
         clientEmail: resolvedClientEmail,
@@ -615,6 +641,7 @@ function App() {
         details: requestForm.details,
         serialNumber: requestForm.serialNumber || '',
         scheduledFor: scheduledDate,
+        scheduledEnd: scheduledEndDate,
         status: nearest ? 'Assigned' : 'Pending',
         assignedTechName: nearest?.name || '',
         assignedTechEmail: nearest?.email || '',
@@ -639,6 +666,7 @@ function App() {
         details: '',
         serialNumber: '',
         scheduledFor: '',
+        scheduledEndTime: '',
       });
     } catch (error) {
       console.error('Submit request failed', error);
@@ -1106,7 +1134,7 @@ function App() {
 
     const conflict = canStaffManage ? findTechConflict(job, tech.email, jobs) : null;
     if (conflict) {
-      const when = conflict.scheduledFor ? formatDate(conflict.scheduledFor) : 'now';
+      const when = conflict.scheduledFor ? formatSchedule(conflict) : 'now';
       const confirmed = window.confirm(`${tech.name} is already assigned to another job (${conflict.client || conflict.task || 'job'}, ${when}) during this window. Assign them to this job anyway?`);
       if (!confirmed) return;
     }
@@ -1486,15 +1514,27 @@ function App() {
                   />
                 </label>
               </div>
-              <label className="block">
-                <span className="text-slate-300 text-sm">Scheduled date &amp; time <span className="text-slate-500 text-xs">(optional � leave blank for immediate dispatch)</span></span>
-                <input
-                  type="datetime-local"
-                  value={requestForm.scheduledFor}
-                  onChange={(e) => setRequestForm((prev) => ({ ...prev, scheduledFor: e.target.value }))}
-                  className="mt-2 w-full rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3 text-slate-100"
-                />
-              </label>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <label className="block">
+                  <span className="text-slate-300 text-sm">Scheduled date &amp; start time <span className="text-slate-500 text-xs">(optional, leave blank for immediate dispatch)</span></span>
+                  <input
+                    type="datetime-local"
+                    value={requestForm.scheduledFor}
+                    onChange={(e) => setRequestForm((prev) => ({ ...prev, scheduledFor: e.target.value }))}
+                    className="mt-2 w-full rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3 text-slate-100"
+                  />
+                </label>
+                <label className="block">
+                  <span className="text-slate-300 text-sm">End time <span className="text-slate-500 text-xs">(same day)</span></span>
+                  <input
+                    type="time"
+                    value={requestForm.scheduledEndTime}
+                    onChange={(e) => setRequestForm((prev) => ({ ...prev, scheduledEndTime: e.target.value }))}
+                    disabled={!requestForm.scheduledFor}
+                    className="mt-2 w-full rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3 text-slate-100 disabled:opacity-50"
+                  />
+                </label>
+              </div>
               {requestError && <div className="rounded-2xl bg-red-900/50 p-3 text-red-200">{requestError}</div>}
               {requestSuccess && <div className="rounded-2xl bg-emerald-900/50 p-3 text-emerald-200">{requestSuccess}</div>}
               <button type="submit" className="rounded-2xl bg-teal-600 px-5 py-3 text-white font-semibold hover:bg-teal-500 transition">
@@ -1744,7 +1784,7 @@ function App() {
                       <span className="font-semibold text-white">{job.client}</span>
                       <span className="text-slate-300 text-sm truncate max-w-xs">{job.task}</span>
                       <span className="text-slate-400 text-sm">{job.assignedTechName || 'Unassigned'}</span>
-                      {job.scheduledFor && <span className="text-amber-300 text-sm">{formatDate(job.scheduledFor)}</span>}
+                      {job.scheduledFor && <span className="text-amber-300 text-sm">{formatSchedule(job)}</span>}
                       <span className="ml-auto text-xs text-slate-400">Expand</span>
                     </button>
                   );
@@ -1801,7 +1841,7 @@ function App() {
                         {job.scheduledFor && (
                           <div>
                             <div className="text-slate-400 text-sm mt-3">Scheduled for</div>
-                            <div className="text-amber-300 text-sm font-semibold">{formatDate(job.scheduledFor)}</div>
+                            <div className="text-amber-300 text-sm font-semibold">{formatSchedule(job)}</div>
                           </div>
                         )}
                         <div className="text-slate-400 text-sm mt-3">Created</div>
