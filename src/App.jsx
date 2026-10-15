@@ -243,7 +243,8 @@ function App() {
   const [assignments, setAssignments] = useState({});
   const [users, setUsers] = useState([]);
   const [userRoleEdits, setUserRoleEdits] = useState({});
-  const [showAddUserPanel, setShowAddUserPanel] = useState(true);
+  const [showAddUserPanel, setShowAddUserPanel] = useState(false);
+  const [showUsersPanel, setShowUsersPanel] = useState(false);
   const [showJobsPanel, setShowJobsPanel] = useState(false);
   const [showCompletedJobsPanel, setShowCompletedJobsPanel] = useState(false);
   const [jobSearch, setJobSearch] = useState('');
@@ -256,7 +257,7 @@ function App() {
   const [profilePhotoUploadBusy, setProfilePhotoUploadBusy] = useState(false);
   const [geoEventBusyJobId, setGeoEventBusyJobId] = useState(null);
   const [savedRoles, setSavedRoles] = useState({});
-  const [requestFormOpen, setRequestFormOpen] = useState(true);
+  const [requestFormOpen, setRequestFormOpen] = useState(false);
   const [editingJobId, setEditingJobId] = useState(null);
   const [jobEdits, setJobEdits] = useState({});
   const suppressAuthStateRef = useRef(false);
@@ -482,6 +483,11 @@ function App() {
   };
 
   const logout = async () => {
+    setShowAddUserPanel(false);
+    setShowUsersPanel(false);
+    setShowJobsPanel(false);
+    setShowCompletedJobsPanel(false);
+    setRequestFormOpen(false);
     await firebaseSignOut(auth);
     setProfile(null);
     setFirebaseUser(null);
@@ -1545,12 +1551,17 @@ function App() {
 
           {isAdmin && (
           <section className="rounded-3xl bg-slate-950/60 border border-slate-700 p-6 grid gap-4">
-            <div>
-              <h2 className="text-xl font-semibold text-white">Existing users</h2>
-              <p className="text-slate-400 mt-1">Manage role assignments and remove users from app access.</p>
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h2 className="text-xl font-semibold text-white">Existing users</h2>
+                <p className="text-slate-400 mt-1">Manage role assignments and remove users from app access.</p>
+              </div>
+              <button type="button" onClick={() => setShowUsersPanel((prev) => !prev)} className="rounded-2xl border border-slate-600 px-4 py-2 text-sm text-slate-200 hover:bg-slate-700 transition">
+                {showUsersPanel ? 'Collapse' : 'Expand'}
+              </button>
             </div>
 
-            {users.length === 0 ? (
+            {!showUsersPanel ? null : users.length === 0 ? (
               <div className="rounded-2xl bg-slate-900 p-4 text-slate-400">No users found.</div>
             ) : (
               <div className="space-y-3">
