@@ -25,6 +25,28 @@ service cloud.firestore {
       return isSignedIn() && getUserRole() == 'client';
     }
 
+    function jobHasNoEmbeddedBilling(job) {
+      return job.get('billingMigrated', false) == true &&
+        !job.keys().hasAny(['serviceFee', 'serviceFeeDescription', 'consumables']);
+    }
+
+    function canReadJobConsumables(jobId) {
+      let job = get(/databases/$(database)/documents/jobs/$(jobId)).data;
+      return jobHasNoEmbeddedBilling(job) && (
+        isAdmin() ||
+        (isAdminAssistant() && job.status != 'Completed') ||
+        (isClient() && job.clientEmail == request.auth.token.email) ||
+        (isTech() && job.assignedTechEmail == request.auth.token.email)
+      );
+    }
+
+    function canManageJobConsumables(jobId) {
+      let job = get(/databases/$(database)/documents/jobs/$(jobId)).data;
+      return jobHasNoEmbeddedBilling(job) &&
+        job.get('invoiceSent', false) != true &&
+        (isAdmin() || (isTech() && job.assignedTechEmail == request.auth.token.email));
+    }
+
     match /users/{userId} {
       allow read: if isSignedIn() && (request.auth.uid == userId || isAdmin());
       allow create: if isSignedIn() && (
@@ -57,20 +79,37 @@ service cloud.firestore {
     match /jobs/{jobId} {
       allow read: if isSignedIn() && (
         isAdmin() ||
-        (isAdminAssistant() && resource.data.status != 'Completed') ||
-        resource.data.clientEmail == request.auth.token.email ||
-        resource.data.assignedTechEmail == request.auth.token.email
+        (isAdminAssistant() && resource.data.status != 'Completed' && jobHasNoEmbeddedBilling(resource.data)) ||
+        (isClient() && resource.data.clientEmail == request.auth.token.email) ||
+        (isTech() &&
+          resource.data.assignedTechEmail == request.auth.token.email &&
+          jobHasNoEmbeddedBilling(resource.data))
       );
 
       allow create: if isSignedIn() && (
         isAdmin() ||
-        // Assistants can create jobs for clients, but never with billing data or a closed status
+        // Staff and clients create only jobs whose billing is stored separately.
         (isAdminAssistant() &&
           request.resource.data.status in ['Pending', 'Assigned', 'Dispatched'] &&
-          request.resource.data.get('serviceFee', 0) == 0 &&
-          request.resource.data.get('consumables', []).size() == 0 &&
+          jobHasNoEmbeddedBilling(request.resource.data) &&
+          request.resource.data.keys().hasOnly([
+            'client', 'clientEmail', 'clientPhone', 'location', 'rawLocation', 'lat', 'lng',
+            'task', 'details', 'serialNumber', 'scheduledFor', 'scheduledEnd', 'status',
+            'assignedTechName', 'assignedTechEmail', 'assignedTechDistanceMiles',
+            'assignedTechDistanceKm', 'billingMigrated', 'invoiceSent', 'beforePhotoUrl',
+            'afterPhotoUrl', 'clientSignedOff', 'createdAt'
+          ]) &&
           request.resource.data.get('invoiceSent', false) == false) ||
-        (isClient() && request.resource.data.clientEmail == request.auth.token.email)
+        (isClient() &&
+          request.resource.data.clientEmail == request.auth.token.email &&
+          jobHasNoEmbeddedBilling(request.resource.data) &&
+          request.resource.data.keys().hasOnly([
+            'client', 'clientEmail', 'clientPhone', 'location', 'rawLocation', 'lat', 'lng',
+            'task', 'details', 'serialNumber', 'scheduledFor', 'scheduledEnd', 'status',
+            'assignedTechName', 'assignedTechEmail', 'assignedTechDistanceMiles',
+            'assignedTechDistanceKm', 'billingMigrated', 'invoiceSent', 'beforePhotoUrl',
+            'afterPhotoUrl', 'clientSignedOff', 'createdAt'
+          ]))
       );
 
       allow update: if isSignedIn() && (
@@ -82,12 +121,52 @@ service cloud.firestore {
             'assignedTechName', 'assignedTechEmail', 'assignedTechDistanceMiles',
             'assignedTechDistanceKm', 'status', 'updatedAt'
           ])) ||
-        (isTech() && resource.data.assignedTechEmail == request.auth.token.email) ||
+        (isTech() &&
+          resource.data.assignedTechEmail == request.auth.token.email &&
+          jobHasNoEmbeddedBilling(resource.data) &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'status', 'enRouteAt', 'updatedAt',
+            'checkInAt', 'checkInLat', 'checkInLng',
+            'checkOutAt', 'checkOutLat', 'checkOutLng',
+            'breaks', 'beforePhotoUrl', 'afterPhotoUrl', 'signoffRequestedAt'
+          ]) &&
+          request.resource.data.status in ['Assigned', 'Dispatched', 'En Route', 'On Site', 'Ready for Signoff']) ||
         // Clients can only set clientSignedOff on their own jobs; no other fields
         (isClient() && resource.data.clientEmail == request.auth.token.email &&
           request.resource.data.diff(resource.data).affectedKeys().hasOnly(['clientSignedOff', 'status', 'completedAt']))
       );
       allow delete: if isAdmin();
+
+      match /consumables/{itemId} {
+        allow read: if canReadJobConsumables(jobId);
+        allow create: if canManageJobConsumables(jobId) &&
+          request.resource.data.keys().hasOnly(['description', 'qty', 'createdAt']) &&
+          request.resource.data.keys().hasAll(['description', 'qty']) &&
+          request.resource.data.description is string &&
+          request.resource.data.qty is number &&
+          request.resource.data.qty >= 1;
+        allow update: if canManageJobConsumables(jobId) &&
+          request.resource.data.keys().hasOnly(['description', 'qty', 'createdAt', 'updatedAt']) &&
+          request.resource.data.keys().hasAll(['description', 'qty']) &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['description', 'qty', 'updatedAt']) &&
+          request.resource.data.description is string &&
+          request.resource.data.qty is number &&
+          request.resource.data.qty >= 1;
+        allow delete: if canManageJobConsumables(jobId);
+      }
+    }
+
+    match /jobBilling/{jobId} {
+      allow read: if isAdmin() || (
+        isClient() &&
+        get(/databases/$(database)/documents/jobs/$(jobId)).data.clientEmail == request.auth.token.email
+      );
+      allow create, update, delete: if isAdmin();
+    }
+
+    match /systemMetadata/{documentId} {
+      allow read: if isAdmin();
+      allow write: if false;
     }
   }
 }

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { db, storage, auth, messaging, VAPID_KEY } from './firebase';
-import { collection, onSnapshot, addDoc, query, orderBy, deleteDoc, doc, updateDoc, getDocs, getDoc, setDoc, where, limit, getCountFromServer } from 'firebase/firestore';
+import { db, storage, auth, messaging, functions, VAPID_KEY } from './firebase';
+import { collection, onSnapshot, addDoc, query, orderBy, deleteDoc, doc, updateDoc, getDocs, getDoc, setDoc, where, limit, getCountFromServer, writeBatch } from 'firebase/firestore';
+import { httpsCallable } from 'firebase/functions';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { getToken } from 'firebase/messaging';
 import {
@@ -165,52 +166,52 @@ const loadImageDataUrl = async (url) => {
 const generateInvoicePdf = async (job, onError) => {
   try {
     const { jsPDF } = await import('jspdf');
-    const doc = new jsPDF({ unit: 'pt', format: 'letter' });
+    const pdf = new jsPDF({ unit: 'pt', format: 'letter' });
     const logoDataUrl = await loadImageDataUrl(logoPath);
-    doc.addImage(logoDataUrl, 'JPEG', 40, 40, 120, 40);
-    doc.setFontSize(18);
-    doc.text(BUSINESS_NAME, 40, 100);
-    doc.setFontSize(12);
-    doc.text(`Invoice ID: ${job.id}`, 40, 125);
-    doc.text(`Date: ${formatDate(job.createdAt)}`, 40, 145);
-    doc.text(`Client: ${job.client}`, 40, 165);
-    doc.text(`Location: ${job.location}`, 40, 185);
-    doc.text(`Assigned Tech: ${job.assignedTechName || 'N/A'}`, 40, 205);
-    doc.text(`Service: ${job.task}`, 40, 225);
-    doc.text(`Service fee: $${Number(job.serviceFee || 0).toFixed(2)}`, 40, 245);
-    doc.setFontSize(11);
-    doc.text(`Service fee description: ${job.serviceFeeDescription || 'N/A'}`, 40, 262);
+    pdf.addImage(logoDataUrl, 'JPEG', 40, 40, 120, 40);
+    pdf.setFontSize(18);
+    pdf.text(BUSINESS_NAME, 40, 100);
+    pdf.setFontSize(12);
+    pdf.text(`Invoice ID: ${job.id}`, 40, 125);
+    pdf.text(`Date: ${formatDate(job.createdAt)}`, 40, 145);
+    pdf.text(`Client: ${job.client}`, 40, 165);
+    pdf.text(`Location: ${job.location}`, 40, 185);
+    pdf.text(`Assigned Tech: ${job.assignedTechName || 'N/A'}`, 40, 205);
+    pdf.text(`Service: ${job.task}`, 40, 225);
+    pdf.text(`Service fee: $${Number(job.serviceFee || 0).toFixed(2)}`, 40, 245);
+    pdf.setFontSize(11);
+    pdf.text(`Service fee description: ${job.serviceFeeDescription || 'N/A'}`, 40, 262);
     let y = 282;
-    doc.setFontSize(12);
-    doc.text('Service details:', 40, y);
+    pdf.setFontSize(12);
+    pdf.text('Service details:', 40, y);
     y += 18;
-    doc.setFontSize(11);
-    doc.text(job.details || 'N/A', 40, y);
+    pdf.setFontSize(11);
+    pdf.text(job.details || 'N/A', 40, y);
     y += 28;
-    doc.setFontSize(12);
-    doc.text('Consumables:', 40, y);
+    pdf.setFontSize(12);
+    pdf.text('Consumables:', 40, y);
 
     let yConsumables = y + 20;
     const consumables = job.consumables || [];
     if (consumables.length === 0) {
-      doc.text('None', 40, yConsumables);
+      pdf.text('None', 40, yConsumables);
       yConsumables += 20;
     } else {
-      doc.setFontSize(11);
+      pdf.setFontSize(11);
       consumables.forEach((item) => {
         const amount = Number(item.qty || 0) * Number(item.unitPrice || 0);
-        doc.text(`${item.description} - ${item.qty} x $${Number(item.unitPrice || 0).toFixed(2)} = $${amount.toFixed(2)}`, 40, yConsumables);
+        pdf.text(`${item.description} - ${item.qty} x $${Number(item.unitPrice || 0).toFixed(2)} = $${amount.toFixed(2)}`, 40, yConsumables);
         yConsumables += 18;
       });
       yConsumables += 10;
     }
 
-    doc.setFontSize(12);
-    doc.text(`Total: $${calcInvoiceTotal(consumables, job.serviceFee).toFixed(2)}`, 40, yConsumables + 10);
-    const footerY = doc.internal.pageSize.height - 40;
-    doc.setFontSize(10);
-    doc.text('Thank you for choosing Silicon Valley Smart Hands LLC.', 40, footerY);
-    doc.save(`SV-Smart-Dispatch-Invoice-${job.id}.pdf`);
+    pdf.setFontSize(12);
+    pdf.text(`Total: $${calcInvoiceTotal(consumables, job.serviceFee).toFixed(2)}`, 40, yConsumables + 10);
+    const footerY = pdf.internal.pageSize.height - 40;
+    pdf.setFontSize(10);
+    pdf.text('Thank you for choosing Silicon Valley Smart Hands LLC.', 40, footerY);
+    pdf.save(`SV-Smart-Dispatch-Invoice-${job.id}.pdf`);
     await updateDoc(doc(db, 'jobs', job.id), {
       invoiceSent: true,
       invoiceSentAt: new Date(),
@@ -243,6 +244,8 @@ function App() {
   const [loginError, setLoginError] = useState('');
   const [appError, setAppError] = useState('');
   const [jobs, setJobs] = useState([]);
+  const [jobBilling, setJobBilling] = useState({});
+  const [jobConsumables, setJobConsumables] = useState({});
   const [techs, setTechs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [uploadingId, setUploadingId] = useState(null);
@@ -277,6 +280,10 @@ function App() {
   const [showResetForm, setShowResetForm] = useState(false);
   const [profilePhotoUploadBusy, setProfilePhotoUploadBusy] = useState(false);
   const [geoEventBusyJobId, setGeoEventBusyJobId] = useState(null);
+  const [billingMigrationBusy, setBillingMigrationBusy] = useState(false);
+  const [billingMigrationMessage, setBillingMigrationMessage] = useState('');
+  const [billingMigrationComplete, setBillingMigrationComplete] = useState(false);
+  const [sessionRestoreCount, setSessionRestoreCount] = useState(0);
   const [savedRoles, setSavedRoles] = useState({});
   const [requestFormOpen, setRequestFormOpen] = useState(false);
   const [editingJobId, setEditingJobId] = useState(null);
@@ -399,7 +406,7 @@ function App() {
     );
 
     return () => unsubscribe();
-  }, [profile?.role, profile?.email, firebaseUser?.email]);
+  }, [profile?.role, profile?.email, firebaseUser?.email, sessionRestoreCount]);
 
   const COMPLETED_PAGE_SIZE = 25;
   const scopedCompletedConstraints = () => {
@@ -439,7 +446,52 @@ function App() {
       }
     );
     return () => unsubscribe();
-  }, [profile?.role, profile?.email, firebaseUser?.email, showCompletedJobsPanel, completedLimit]);
+  }, [profile?.role, profile?.email, firebaseUser?.email, showCompletedJobsPanel, completedLimit, sessionRestoreCount]);
+
+  const observedJobIds = [...new Set([...jobs, ...completedJobsData].map((job) => job.id))].sort();
+  const observedJobIdsKey = observedJobIds.join('|');
+
+  useEffect(() => {
+    if (!profile?.role) return () => {};
+    const jobIds = observedJobIdsKey ? observedJobIdsKey.split('|') : [];
+    const subscriptions = [];
+    setJobBilling({});
+    setJobConsumables({});
+
+    jobIds.forEach((jobId) => {
+      subscriptions.push(onSnapshot(
+        collection(db, 'jobs', jobId, 'consumables'),
+        (snapshot) => {
+          setJobConsumables((prev) => ({
+            ...prev,
+            [jobId]: snapshot.docs.map((itemDoc) => ({ ...itemDoc.data(), id: itemDoc.id })),
+          }));
+        },
+        (error) => {
+          console.error(`Unable to load consumables for job ${jobId}`, error);
+          if (!suppressAuthStateRef.current) setAppError('Unable to load job consumables.');
+        },
+      ));
+
+      if (profile.role === 'admin' || profile.role === 'client') {
+        subscriptions.push(onSnapshot(
+          doc(db, 'jobBilling', jobId),
+          (snapshot) => {
+            setJobBilling((prev) => ({
+              ...prev,
+              [jobId]: snapshot.exists() ? snapshot.data() : {},
+            }));
+          },
+          (error) => {
+            console.error(`Unable to load billing data for job ${jobId}`, error);
+            if (!suppressAuthStateRef.current) setAppError('Unable to load job billing data.');
+          },
+        ));
+      }
+    });
+
+    return () => subscriptions.forEach((unsubscribe) => unsubscribe());
+  }, [observedJobIdsKey, profile?.role, sessionRestoreCount]);
 
   useEffect(() => {
     const q = query(collection(db, 'technicians'), orderBy('name', 'asc'));
@@ -462,6 +514,21 @@ function App() {
       setUsers(userItems);
     });
     return () => unsubscribe();
+  }, [profile?.role]);
+
+  useEffect(() => {
+    if (profile?.role !== 'admin') {
+      setBillingMigrationComplete(false);
+      return () => {};
+    }
+    return onSnapshot(
+      doc(db, 'systemMetadata', 'billingMigration'),
+      (snapshot) => setBillingMigrationComplete(snapshot.data()?.completed === true),
+      (error) => {
+        console.error('Unable to load billing migration status', error);
+        setAppError('Unable to load billing migration status.');
+      },
+    );
   }, [profile?.role]);
 
   useEffect(() => {
@@ -647,9 +714,7 @@ function App() {
         assignedTechEmail: nearest?.email || '',
         assignedTechDistanceMiles: nearest?.distanceMiles || null,
         assignedTechDistanceKm: nearest?.distanceKm || null,
-        consumables: [],
-        serviceFee: 0,
-        serviceFeeDescription: '',
+        billingMigrated: true,
         invoiceSent: false,
         beforePhotoUrl: '',
         afterPhotoUrl: '',
@@ -688,6 +753,18 @@ function App() {
     const adminPassword = newAccount.adminPassword;
     const adminUid = firebaseUser?.uid;
 
+    // Locate the base address first so a failed lookup can't leave a half-created technician
+    let techGeo = null;
+    if (newAccount.role === 'tech') {
+      try {
+        techGeo = await geocodeAddress(newAccount.location);
+      } catch (error) {
+        console.error('Technician address lookup failed', error);
+        setAccountMessage('Unable to locate that base address. Include the street, city, and state, then try again.');
+        return;
+      }
+    }
+
     suppressAuthStateRef.current = true;
     try {
       const result = await createUserWithEmailAndPassword(auth, newAccount.email.trim(), newAccount.password.trim());
@@ -701,16 +778,15 @@ function App() {
       });
 
       if (newAccount.role === 'tech') {
-        const geo = await geocodeAddress(newAccount.location);
         await setDoc(doc(db, 'technicians', user.uid), {
           uid: user.uid,
           name: newAccount.name,
           email: newAccount.email.trim(),
           phone: newAccount.phone || '',
-          location: geo.displayName,
+          location: techGeo.displayName,
           rawLocation: newAccount.location,
-          lat: geo.lat,
-          lng: geo.lng,
+          lat: techGeo.lat,
+          lng: techGeo.lng,
           status: 'available',
           createdAt: new Date(),
         });
@@ -722,6 +798,8 @@ function App() {
       const adminDocSnap = await getDoc(doc(db, 'users', adminUid));
       setFirebaseUser(auth.currentUser);
       if (adminDocSnap.exists()) setProfile({ id: adminDocSnap.id, ...adminDocSnap.data() });
+      setAppError('');
+      setSessionRestoreCount((count) => count + 1);
       setAccountMessage(`${newAccount.role === 'tech' ? 'Technician' : 'Client'} account created successfully.`);
       setNewAccount({ name: '', email: '', password: '', role: 'tech', phone: '', location: '', adminPassword: '' });
     } catch (error) {
@@ -733,6 +811,8 @@ function App() {
           const adminDocSnap = await getDoc(doc(db, 'users', adminUid));
           setFirebaseUser(auth.currentUser);
           if (adminDocSnap.exists()) setProfile({ id: adminDocSnap.id, ...adminDocSnap.data() });
+          setAppError('');
+          setSessionRestoreCount((count) => count + 1);
         }
       } catch (recoveryError) {
         console.error('Admin session recovery failed', recoveryError);
@@ -914,15 +994,26 @@ function App() {
 
   const addConsumable = async (job) => {
     if (!newConsumable.description || !newConsumable.qty) return;
-    const item = {
-      description: newConsumable.description,
-      qty: Number(newConsumable.qty),
-      unitPrice: Number(newConsumable.unitPrice || 0),
-    };
-    await updateDoc(doc(db, 'jobs', job.id), {
-      consumables: [...(job.consumables || []), item],
-    });
-    setNewConsumable({ description: '', qty: 1, unitPrice: '' });
+    try {
+      const itemRef = doc(collection(db, 'jobs', job.id, 'consumables'));
+      const batch = writeBatch(db);
+      batch.set(itemRef, {
+        description: newConsumable.description,
+        qty: Number(newConsumable.qty),
+        createdAt: new Date(),
+      });
+      if (profile?.role === 'admin') {
+        batch.set(doc(db, 'jobBilling', job.id), {
+          consumablePrices: { [itemRef.id]: Number(newConsumable.unitPrice || 0) },
+          updatedAt: new Date(),
+        }, { merge: true });
+      }
+      await batch.commit();
+      setNewConsumable({ description: '', qty: 1, unitPrice: '' });
+    } catch (error) {
+      console.error('Add consumable failed', error);
+      setAppError('Unable to add consumable.');
+    }
   };
 
   const addServiceFee = async (job) => {
@@ -936,11 +1027,17 @@ function App() {
       setAppError('Cannot update service fee after the invoice has been sent.');
       return;
     }
-    await updateDoc(doc(db, 'jobs', job.id), {
-      serviceFee: Number(serviceInput.amount),
-      serviceFeeDescription: serviceInput.description || '',
-    });
-    setServiceFeeInputs((prev) => ({ ...prev, [job.id]: { amount: '', description: '' } }));
+    try {
+      await setDoc(doc(db, 'jobBilling', job.id), {
+        serviceFee: Number(serviceInput.amount),
+        serviceFeeDescription: serviceInput.description || '',
+        updatedAt: new Date(),
+      }, { merge: true });
+      setServiceFeeInputs((prev) => ({ ...prev, [job.id]: { amount: '', description: '' } }));
+    } catch (error) {
+      console.error('Save service fee failed', error);
+      setAppError('Unable to save service fee.');
+    }
   };
 
   const deleteServiceFee = async (job) => {
@@ -952,67 +1049,108 @@ function App() {
       setAppError('Cannot delete service fee after the invoice has been sent.');
       return;
     }
-    await updateDoc(doc(db, 'jobs', job.id), {
-      serviceFee: 0,
-      serviceFeeDescription: '',
-    });
-    setServiceFeeInputs((prev) => ({ ...prev, [job.id]: { amount: '', description: '' } }));
+    try {
+      await setDoc(doc(db, 'jobBilling', job.id), {
+        serviceFee: 0,
+        serviceFeeDescription: '',
+        updatedAt: new Date(),
+      }, { merge: true });
+      setServiceFeeInputs((prev) => ({ ...prev, [job.id]: { amount: '', description: '' } }));
+    } catch (error) {
+      console.error('Delete service fee failed', error);
+      setAppError('Unable to delete service fee.');
+    }
   };
 
-  const updateConsumableField = (jobId, index, field, value) => {
+  const updateConsumableField = (jobId, itemId, field, value) => {
     setConsumableEdits((prev) => ({
       ...prev,
       [jobId]: {
         ...(prev[jobId] || {}),
-        [index]: {
-          ...(prev[jobId]?.[index] || {}),
+        [itemId]: {
+          ...(prev[jobId]?.[itemId] || {}),
           [field]: value,
         },
       },
     }));
   };
 
-  const saveConsumableChange = async (job, index) => {
+  const saveConsumableChange = async (job, itemId) => {
     if (job.invoiceSent) {
       setAppError('Cannot modify consumables after the invoice has been sent.');
       return;
     }
-    const itemEdit = consumableEdits[job.id]?.[index];
+    const itemEdit = consumableEdits[job.id]?.[itemId];
     if (!itemEdit) return;
-    const updatedConsumables = (job.consumables || []).map((item, idx) =>
-      idx === index
-        ? {
-            ...item,
-            description: itemEdit.description ?? item.description,
-            qty: Number(itemEdit.qty ?? item.qty),
-            unitPrice: Number(itemEdit.unitPrice ?? item.unitPrice),
-          }
-        : item
-    );
-    await updateDoc(doc(db, 'jobs', job.id), {
-      consumables: updatedConsumables,
-    });
-    setConsumableEdits((prev) => {
-      const jobEdits = { ...(prev[job.id] || {}) };
-      delete jobEdits[index];
-      return { ...prev, [job.id]: jobEdits };
-    });
+    const item = (job.consumables || []).find((line) => line.id === itemId);
+    if (!item) return;
+    try {
+      const batch = writeBatch(db);
+      batch.update(doc(db, 'jobs', job.id, 'consumables', item.id), {
+        description: itemEdit.description ?? item.description,
+        qty: Number(itemEdit.qty ?? item.qty),
+        updatedAt: new Date(),
+      });
+      if (profile?.role === 'admin' && itemEdit.unitPrice != null) {
+        batch.set(doc(db, 'jobBilling', job.id), {
+          consumablePrices: { [item.id]: Number(itemEdit.unitPrice) },
+          updatedAt: new Date(),
+        }, { merge: true });
+      }
+      await batch.commit();
+      setConsumableEdits((prev) => {
+        const jobEdits = { ...(prev[job.id] || {}) };
+        delete jobEdits[itemId];
+        return { ...prev, [job.id]: jobEdits };
+      });
+    } catch (error) {
+      console.error('Save consumable change failed', error);
+      setAppError('Unable to save consumable changes.');
+    }
   };
 
-  const deleteConsumable = async (job, index) => {
+  const deleteConsumable = async (job, itemId) => {
     if (job.invoiceSent) {
       setAppError('Cannot delete consumables after the invoice has been sent.');
       return;
     }
-    const updatedConsumables = (job.consumables || []).filter((_, idx) => idx !== index);
-    await updateDoc(doc(db, 'jobs', job.id), {
-      consumables: updatedConsumables,
-    });
-    setConsumableEdits((prev) => {
-      const jobEdits = { ...(prev[job.id] || {}) };
-      delete jobEdits[index];
-      return { ...prev, [job.id]: jobEdits };
-    });
+    const item = (job.consumables || []).find((line) => line.id === itemId);
+    if (!item) return;
+    try {
+      await deleteDoc(doc(db, 'jobs', job.id, 'consumables', item.id));
+      setConsumableEdits((prev) => {
+        const jobEdits = { ...(prev[job.id] || {}) };
+        delete jobEdits[itemId];
+        return { ...prev, [job.id]: jobEdits };
+      });
+    } catch (error) {
+      console.error('Delete consumable failed', error);
+      setAppError('Unable to delete consumable.');
+    }
+  };
+
+  const migrateJobBillingData = async () => {
+    if (profile?.role !== 'admin' || billingMigrationBusy) return;
+    if (!window.confirm('Move existing job prices into protected billing records? Technicians will be unable to view jobs until each job is migrated.')) return;
+    setBillingMigrationBusy(true);
+    setBillingMigrationMessage('');
+    try {
+      const migrate = httpsCallable(functions, 'migrateJobBilling');
+      let cursor = null;
+      let totalMigrated = 0;
+      do {
+        const result = await migrate({ cursor });
+        totalMigrated += result.data.migrated;
+        cursor = result.data.nextCursor;
+        setBillingMigrationMessage(`Securing billing... ${totalMigrated} job(s) processed.`);
+      } while (cursor);
+      setBillingMigrationMessage(`Secured billing for ${totalMigrated} job(s).`);
+    } catch (error) {
+      console.error('Billing data migration failed', error);
+      setAppError('Unable to finish billing data migration. You can safely run it again.');
+    } finally {
+      setBillingMigrationBusy(false);
+    }
   };
 
   const requestClientSignoff = async (job) => {
@@ -1166,12 +1304,27 @@ function App() {
   const canStaffManage = isAdmin || isAssistant;
   const roleLabel = isAssistant ? 'Admin Assistant' : profile?.role;
 
+  const withPrivateData = (job) => {
+    const billing = jobBilling[job.id] || {};
+    const items = jobConsumables[job.id] || [];
+    return {
+      ...job,
+      ...(profile?.role === 'admin' || profile?.role === 'client' ? billing : {}),
+      consumables: items.map((item) => (
+        profile?.role === 'admin' || profile?.role === 'client'
+          ? { ...item, unitPrice: billing.consumablePrices?.[item.id] ?? 0 }
+          : item
+      )),
+    };
+  };
+
+  const jobsWithPrivateData = jobs.map(withPrivateData);
   const currentJobs = profile
     ? canStaffManage
-      ? jobs
+      ? jobsWithPrivateData
       : profile.role === 'tech'
-        ? jobs.filter((job) => job.assignedTechEmail === (profile.email || firebaseUser?.email))
-        : jobs.filter((job) => job.clientEmail === (profile.email || firebaseUser?.email))
+        ? jobsWithPrivateData.filter((job) => job.assignedTechEmail === (profile.email || firebaseUser?.email))
+        : jobsWithPrivateData.filter((job) => job.clientEmail === (profile.email || firebaseUser?.email))
     : [];
 
   const canViewInvoice = profile?.role === 'admin' || profile?.role === 'client';
@@ -1180,7 +1333,7 @@ function App() {
   const dispatchedJobsCount = currentJobs.filter(isJobDispatched).length;
   const completedJobsCount = completedTotal;
   const activeJobs = currentJobs.filter((job) => job.status !== 'Completed');
-  const completedJobs = completedJobsData;
+  const completedJobs = completedJobsData.map(withPrivateData);
   const filteredActiveJobs = activeJobs.filter((job) => {
     const matchesStatus = jobStatusFilter === 'All'
       || (jobStatusFilter === 'Assigned' ? isJobAssigned(job)
@@ -1719,13 +1872,36 @@ function App() {
               <h2 className="text-xl font-semibold text-white">Active jobs</h2>
               <p className="text-slate-400 text-sm mt-1">Jobs currently in progress or awaiting dispatch.</p>
             </div>
-            <button
-              type="button"
-              onClick={() => setShowJobsPanel((prev) => !prev)}
-              className="rounded-2xl border border-slate-600 px-4 py-2 text-sm text-slate-200 hover:bg-slate-800 transition"
-            >
-              {showJobsPanel ? 'Collapse' : 'Expand'}
-            </button>
+            <div className="flex flex-wrap items-center gap-2">
+              {profile?.role === 'admin' && (
+                <>
+                  {billingMigrationComplete ? (
+                    <span role="status" className="rounded-2xl border border-emerald-700 px-4 py-2 text-sm text-emerald-300">
+                      Billing secured
+                    </span>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={migrateJobBillingData}
+                      disabled={billingMigrationBusy}
+                      className="rounded-2xl border border-amber-700 px-4 py-2 text-sm text-amber-200 hover:bg-amber-900/40 disabled:opacity-60 transition"
+                    >
+                      {billingMigrationBusy ? 'Securing billing...' : 'Secure existing billing'}
+                    </button>
+                  )}
+                  {billingMigrationMessage && (
+                    <span role="status" className="text-sm text-emerald-300">{billingMigrationMessage}</span>
+                  )}
+                </>
+              )}
+              <button
+                type="button"
+                onClick={() => setShowJobsPanel((prev) => !prev)}
+                className="rounded-2xl border border-slate-600 px-4 py-2 text-sm text-slate-200 hover:bg-slate-800 transition"
+              >
+                {showJobsPanel ? 'Collapse' : 'Expand'}
+              </button>
+            </div>
           </div>
 
           {showJobsPanel && (
@@ -1916,22 +2092,22 @@ function App() {
                             <div className="text-slate-500">No consumables yet.</div>
                           ) : (
                             <div className="space-y-2">
-                              {job.consumables.map((item, index) => {
-                                const edit = consumableEdits[job.id]?.[index] || {};
+                              {job.consumables.map((item) => {
+                                const edit = consumableEdits[job.id]?.[item.id] || {};
                                 const itemDescription = edit.description ?? item.description;
                                 const itemQty = edit.qty ?? item.qty;
                                 const itemUnitPrice = edit.unitPrice ?? item.unitPrice;
                                 return (
-                                  <div key={`${job.id}-${index}`} className="rounded-2xl bg-slate-900 p-3 border border-slate-700">
+                                  <div key={item.id} className="rounded-2xl bg-slate-900 p-3 border border-slate-700">
                                     <div className="flex flex-col gap-3">
                                       <div className="flex items-start justify-between gap-3">
                                         <div>
-                                          {job.invoiceSent ? (
+                                          {job.invoiceSent || !['tech', 'admin'].includes(profile.role) ? (
                                             <p className="text-slate-100">{item.description}</p>
                                           ) : (
                                             <input
                                               value={itemDescription}
-                                              onChange={(e) => updateConsumableField(job.id, index, 'description', e.target.value)}
+                                              onChange={(e) => updateConsumableField(job.id, item.id, 'description', e.target.value)}
                                               className="w-full rounded-2xl border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100"
                                             />
                                           )}
@@ -1947,24 +2123,26 @@ function App() {
                                         )}
                                       </div>
                                       {!job.invoiceSent && ['tech', 'admin'].includes(profile.role) && (
-                                        <div className="grid gap-2 sm:grid-cols-[1fr_auto_auto]">
+                                        <div className={`grid gap-2 ${profile.role === 'admin' ? 'sm:grid-cols-[1fr_auto_auto]' : 'sm:grid-cols-[1fr_auto]'}`}>
                                           <input
                                             type="number"
                                             min="1"
                                             value={itemQty}
-                                            onChange={(e) => updateConsumableField(job.id, index, 'qty', e.target.value)}
+                                            onChange={(e) => updateConsumableField(job.id, item.id, 'qty', e.target.value)}
                                             className="rounded-2xl border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100"
                                           />
-                                          <input
-                                            type="number"
-                                            min="0"
-                                            step="0.01"
-                                            value={itemUnitPrice}
-                                            onChange={(e) => updateConsumableField(job.id, index, 'unitPrice', e.target.value)}
-                                            className="rounded-2xl border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100"
-                                          />
+                                          {profile.role === 'admin' && (
+                                            <input
+                                              type="number"
+                                              min="0"
+                                              step="0.01"
+                                              value={itemUnitPrice}
+                                              onChange={(e) => updateConsumableField(job.id, item.id, 'unitPrice', e.target.value)}
+                                              className="rounded-2xl border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100"
+                                            />
+                                          )}
                                           <button
-                                            onClick={() => saveConsumableChange(job, index)}
+                                            onClick={() => saveConsumableChange(job, item.id)}
                                             className="rounded-2xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500 transition"
                                           >
                                             Save
@@ -1973,7 +2151,7 @@ function App() {
                                       )}
                                       {!job.invoiceSent && ['tech', 'admin'].includes(profile.role) && (
                                         <button
-                                          onClick={() => deleteConsumable(job, index)}
+                                          onClick={() => deleteConsumable(job, item.id)}
                                           className="rounded-2xl bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-500 transition"
                                         >
                                           Delete
@@ -1994,7 +2172,7 @@ function App() {
                               placeholder="Item description"
                               className="w-full rounded-2xl border border-slate-700 bg-slate-900 px-4 py-3 text-slate-100"
                             />
-                            <div className="grid grid-cols-2 gap-3">
+                            <div className={`grid gap-3 ${profile.role === 'admin' ? 'grid-cols-2' : 'grid-cols-1'}`}>
                               <input
                                 type="number"
                                 min="1"
@@ -2003,14 +2181,17 @@ function App() {
                                 placeholder="Qty"
                                 className="rounded-2xl border border-slate-700 bg-slate-900 px-4 py-3 text-slate-100"
                               />
-                              <input
-                                type="number"
-                                min="0"
-                                value={newConsumable.unitPrice}
-                                onChange={(e) => setNewConsumable((prev) => ({ ...prev, unitPrice: e.target.value }))}
-                                placeholder="Unit price"
-                                className="rounded-2xl border border-slate-700 bg-slate-900 px-4 py-3 text-slate-100"
-                              />
+                              {profile.role === 'admin' && (
+                                <input
+                                  type="number"
+                                  min="0"
+                                  step="0.01"
+                                  value={newConsumable.unitPrice}
+                                  onChange={(e) => setNewConsumable((prev) => ({ ...prev, unitPrice: e.target.value }))}
+                                  placeholder="Unit price"
+                                  className="rounded-2xl border border-slate-700 bg-slate-900 px-4 py-3 text-slate-100"
+                                />
+                              )}
                             </div>
                             <button onClick={() => addConsumable(job)} className="w-full rounded-2xl bg-teal-600 px-4 py-3 text-white font-semibold hover:bg-teal-500 transition flex items-center justify-center gap-2">
                               <Plus size={16} /> Add consumable
