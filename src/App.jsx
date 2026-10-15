@@ -1566,7 +1566,7 @@ function App() {
                       <select
                         value={userRoleEdits[userItem.id] || userItem.role || 'client'}
                         onChange={(e) => setUserRoleEdits((prev) => ({ ...prev, [userItem.id]: e.target.value }))}
-                        disabled={userItem.id === (profile?.uid || profile?.id) || !!savedRoles[userItem.id]}
+                        disabled={userItem.id === (profile?.uid || profile?.id) || savedRoles[userItem.id] !== false}
                         className="w-full rounded-2xl border border-slate-700 bg-slate-950 px-4 py-2 text-slate-100"
                       >
                         <option value="admin">Admin</option>
@@ -1575,7 +1575,7 @@ function App() {
                         <option value="client">Client</option>
                       </select>
 
-                      {savedRoles[userItem.id] ? (
+                      {savedRoles[userItem.id] !== false ? (
                         <button
                           type="button"
                           onClick={() => setSavedRoles((prev) => ({ ...prev, [userItem.id]: false }))}
