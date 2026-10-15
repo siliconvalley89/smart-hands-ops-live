@@ -66,7 +66,7 @@ service cloud.firestore {
         isAdmin() ||
         // Assistants can create jobs for clients, but never with billing data or a closed status
         (isAdminAssistant() &&
-          request.resource.data.status in ['Pending', 'Dispatched'] &&
+          request.resource.data.status in ['Pending', 'Assigned', 'Dispatched'] &&
           request.resource.data.get('serviceFee', 0) == 0 &&
           request.resource.data.get('consumables', []).size() == 0 &&
           request.resource.data.get('invoiceSent', false) == false) ||
@@ -77,7 +77,7 @@ service cloud.firestore {
         isAdmin() ||
         // Assistants can only assign/reassign technicians on open jobs
         (isAdminAssistant() && resource.data.status != 'Completed' &&
-          request.resource.data.status in ['Pending', 'Dispatched', 'On Site'] &&
+          request.resource.data.status in ['Pending', 'Assigned', 'Dispatched', 'En Route', 'On Site'] &&
           request.resource.data.diff(resource.data).affectedKeys().hasOnly([
             'assignedTechName', 'assignedTechEmail', 'assignedTechDistanceMiles',
             'assignedTechDistanceKm', 'status', 'updatedAt'

@@ -86,7 +86,9 @@ async function sendClientStatusEmail(serviceId, templateId, publicKey, privateKe
   if (!job.clientEmail) return;
 
   const statusMessages = {
+    'Assigned':          `${job.assignedTechName || 'A technician'} has been assigned to your request.`,
     'Dispatched':        `${job.assignedTechName || 'A technician'} has been assigned to your request.`,
+    'En Route':          `${job.assignedTechName || 'Your technician'} is on the way to your location.`,
     'On Site':           `${job.assignedTechName || 'Your technician'} has arrived on site and work is underway.`,
     'Ready for Signoff': 'Your technician has completed the work. Please log in to review and sign off.',
     'Completed':         'Your service request has been completed. Thank you for choosing Silicon Valley Smart Hands LLC.',
@@ -143,15 +145,26 @@ exports.notifyTechOnJobAssigned = onDocumentUpdated('jobs/{jobId}', async (event
   await sendDispatchNotification(event.params.jobId, after);
   return null;
 });
-// Fires on job creation — marks the assigned technician as busy using Admin SDK
+// A technician is busy only while en route or on site; future scheduled/assigned jobs do not make them busy.
+const ACTIVE_FIELD_STATUSES = ['En Route', 'On Site'];
+
+async function syncTechAvailability(email) {
+  if (!email) return;
+  const db = admin.firestore();
+  const techSnap = await db.collection('technicians').where('email', '==', email).limit(1).get();
+  if (techSnap.empty) return;
+  const jobsSnap = await db.collection('jobs').where('assignedTechEmail', '==', email).get();
+  const busy = jobsSnap.docs.some((d) => {
+    const j = d.data();
+    return ACTIVE_FIELD_STATUSES.includes(j.status) && !j.checkOutAt;
+  });
+  await techSnap.docs[0].ref.update(busy ? { status: 'busy', lastAssignedAt: new Date() } : { status: 'available' });
+}
+
+// Fires on job creation — recomputes the assigned technician's availability
 exports.manageTechStatusOnJobCreated = onDocumentCreated('jobs/{jobId}', async (event) => {
   const job = event.data.data();
-  if (!job.assignedTechEmail) return null;
-  const db = admin.firestore();
-  const snap = await db.collection('technicians').where('email', '==', job.assignedTechEmail).limit(1).get();
-  if (!snap.empty) {
-    await snap.docs[0].ref.update({ status: 'busy', lastAssignedAt: new Date() });
-  }
+  await syncTechAvailability(job.assignedTechEmail);
   return null;
 });
 
@@ -167,32 +180,16 @@ exports.manageTechStatusOnJobUpdated = onDocumentUpdated(
   const after = event.data.after.data();
   const db = admin.firestore();
 
-  const getTechDoc = async (email) => {
-    if (!email) return null;
-    const snap = await db.collection('technicians').where('email', '==', email).limit(1).get();
-    return snap.empty ? null : snap.docs[0];
-  };
-
-  // Technician reassigned to a different person
-  if (before.assignedTechEmail !== after.assignedTechEmail) {
-    if (before.assignedTechEmail) {
-      const oldDoc = await getTechDoc(before.assignedTechEmail);
-      if (oldDoc) await oldDoc.ref.update({ status: 'available' });
-    }
-    if (after.assignedTechEmail) {
-      const newDoc = await getTechDoc(after.assignedTechEmail);
-      if (newDoc) await newDoc.ref.update({ status: 'busy', lastAssignedAt: new Date() });
-    }
+  // Recompute availability for affected techs when assignment, status, or check-out changes
+  const changed = before.assignedTechEmail !== after.assignedTechEmail
+    || before.status !== after.status
+    || Boolean(before.checkOutAt) !== Boolean(after.checkOutAt);
+  if (changed) {
+    const emails = new Set([before.assignedTechEmail, after.assignedTechEmail].filter(Boolean));
+    for (const email of emails) await syncTechAvailability(email);
   }
-
-  // Job completed — free up the technician
-  if (before.status !== 'Completed' && after.status === 'Completed' && after.assignedTechEmail) {
-    const techDoc = await getTechDoc(after.assignedTechEmail);
-    if (techDoc) await techDoc.ref.update({ status: 'available' });
-  }
-
   // Email client on meaningful status transitions
-  const notifyStatuses = ['Dispatched', 'On Site', 'Ready for Signoff', 'Completed'];
+  const notifyStatuses = ['Assigned', 'Dispatched', 'En Route', 'On Site', 'Ready for Signoff', 'Completed'];
   if (before.status !== after.status && notifyStatuses.includes(after.status)) {
     await sendClientStatusEmail(
       emailjsServiceId.value().trim(),

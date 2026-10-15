@@ -38,6 +38,46 @@ const formatDate = (value) => {
   return new Date(value).toLocaleString();
 };
 
+const JOB_WINDOW_MS = 2 * 60 * 60 * 1000;
+
+const toMillis = (value) => {
+  if (!value) return null;
+  const ms = value?.toDate ? value.toDate().getTime() : new Date(value).getTime();
+  return Number.isNaN(ms) ? null : ms;
+};
+
+// Dispatched = tech is en route or currently on site (not yet checked out)
+const isJobDispatched = (job) =>
+  job.status === 'En Route' || (job.status === 'On Site' && !job.checkOutAt);
+
+// Assigned = has a tech but work has not started (includes future scheduled jobs; legacy 'Dispatched' status counts here)
+const isJobAssigned = (job) =>
+  Boolean(job.assignedTechEmail) &&
+  !isJobDispatched(job) &&
+  ['Assigned', 'Dispatched', 'Pending'].includes(job.status || 'Assigned');
+
+const getJobStatusLabel = (job) => (isJobAssigned(job) && job.status === 'Dispatched' ? 'Assigned' : job.status);
+
+// Returns the time window a job occupies, or null if it is unscheduled and not in progress
+const getJobWindow = (job, now = Date.now()) => {
+  const scheduled = toMillis(job.scheduledFor);
+  if (scheduled != null) return { start: scheduled, end: scheduled + JOB_WINDOW_MS };
+  if (isJobDispatched(job)) return { start: now, end: now + JOB_WINDOW_MS };
+  return null;
+};
+
+const findTechConflict = (targetJob, techEmail, allJobs) => {
+  if (!techEmail) return null;
+  const now = Date.now();
+  const target = getJobWindow(targetJob, now) || { start: now, end: now + JOB_WINDOW_MS };
+  return allJobs.find((other) => {
+    if (other.id && other.id === targetJob.id) return false;
+    if (other.assignedTechEmail !== techEmail || other.status === 'Completed') return false;
+    const win = getJobWindow(other, now);
+    return win && win.start < target.end && target.start < win.end;
+  }) || null;
+};
+
 const calcInvoiceTotal = (items = [], serviceFee = 0) => {
   return items.reduce((sum, item) => sum + (Number(item.qty || 0) * Number(item.unitPrice || 0)), 0) + Number(serviceFee || 0);
 };
@@ -461,8 +501,8 @@ function App() {
     };
   };
 
-  const findNearestTechnician = (clientLat, clientLng) => {
-    const availableTechs = techs.filter((tech) => tech.status === 'available' && tech.lat != null && tech.lng != null);
+  const findNearestTechnician = (clientLat, clientLng, targetJob) => {
+    const availableTechs = techs.filter((tech) => tech.lat != null && tech.lng != null && !findTechConflict(targetJob, tech.email, jobs));
     if (availableTechs.length === 0) return null;
 
     return availableTechs.reduce((nearest, tech) => {
@@ -493,8 +533,9 @@ function App() {
 
     try {
       const geo = await geocodeAddress(requestForm.location);
-      // Find nearest available tech; Cloud Function marks them busy after job creation
-      const nearest = findNearestTechnician(geo.lat, geo.lng);
+      // Auto-assign the nearest tech with no overlapping job; techs are only marked busy once en route / on site
+      const scheduledDate = requestForm.scheduledFor ? new Date(requestForm.scheduledFor) : null;
+      const nearest = findNearestTechnician(geo.lat, geo.lng, { scheduledFor: scheduledDate });
       await addDoc(collection(db, 'jobs'), {
         client: resolvedClientName,
         clientEmail: resolvedClientEmail,
@@ -506,8 +547,8 @@ function App() {
         task: requestForm.service,
         details: requestForm.details,
         serialNumber: requestForm.serialNumber || '',
-        scheduledFor: requestForm.scheduledFor ? new Date(requestForm.scheduledFor) : null,
-        status: nearest ? 'Dispatched' : 'Pending',
+        scheduledFor: scheduledDate,
+        status: nearest ? 'Assigned' : 'Pending',
         assignedTechName: nearest?.name || '',
         assignedTechEmail: nearest?.email || '',
         assignedTechDistanceMiles: nearest?.distanceMiles || null,
@@ -996,8 +1037,10 @@ function App() {
       return;
     }
 
-    if (tech.status === 'busy') {
-      const confirmed = window.confirm(`${tech.name} is currently assigned to another job. Assign them to this job anyway?`);
+    const conflict = canStaffManage ? findTechConflict(job, tech.email, jobs) : null;
+    if (conflict) {
+      const when = conflict.scheduledFor ? formatDate(conflict.scheduledFor) : 'now';
+      const confirmed = window.confirm(`${tech.name} is already assigned to another job (${conflict.client || conflict.task || 'job'}, ${when}) during this window. Assign them to this job anyway?`);
       if (!confirmed) return;
     }
 
@@ -1012,9 +1055,9 @@ function App() {
         assignedTechEmail: tech.email,
         assignedTechDistanceMiles: distanceMiles,
         assignedTechDistanceKm: distanceMiles,
-        status: 'Dispatched',
+        status: 'Assigned',
       });
-      // Cloud Function (manageTechStatusOnJobUpdated) handles marking old/new tech busy/available
+      // Cloud Function (manageTechStatusOnJobUpdated) marks techs busy only while en route / on site
 
       setAppError('');
     } catch (error) {
@@ -1037,12 +1080,17 @@ function App() {
     : [];
 
   const canViewInvoice = profile?.role === 'admin' || profile?.role === 'client';
-  const activeJobsCount = currentJobs.filter((job) => job.status !== 'Completed').length;
+  const activeJobsCount = currentJobs.filter((job) => job.status !== 'Completed' && !job.assignedTechEmail && !isJobDispatched(job)).length;
+  const assignedJobsCount = currentJobs.filter(isJobAssigned).length;
+  const dispatchedJobsCount = currentJobs.filter(isJobDispatched).length;
   const completedJobsCount = currentJobs.filter((job) => job.status === 'Completed').length;
   const activeJobs = currentJobs.filter((job) => job.status !== 'Completed');
   const completedJobs = currentJobs.filter((job) => job.status === 'Completed');
   const filteredActiveJobs = activeJobs.filter((job) => {
-    const matchesStatus = jobStatusFilter === 'All' || job.status === jobStatusFilter;
+    const matchesStatus = jobStatusFilter === 'All'
+      || (jobStatusFilter === 'Assigned' ? isJobAssigned(job)
+        : jobStatusFilter === 'Dispatched' ? isJobDispatched(job)
+        : job.status === jobStatusFilter);
     const q = jobSearch.toLowerCase();
     const matchesSearch = !q ||
       (job.client || '').toLowerCase().includes(q) ||
@@ -1206,7 +1254,7 @@ function App() {
             {appError}
           </div>
         )}
-        <section className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <section className="grid grid-cols-1 md:grid-cols-3 xl:grid-cols-5 gap-4">
           <div className={`rounded-3xl border p-5 ${(profile.role !== 'client' && !profile.profilePhotoUrl) ? 'bg-amber-900/20 border-amber-700' : 'bg-slate-800 border-slate-700'}`}>
             <div className="flex items-center justify-between">
               <div className="text-slate-400 uppercase tracking-[0.2em] text-xs">Role</div>
@@ -1235,14 +1283,24 @@ function App() {
           {!isAssistant && (
           <div className="bg-slate-800 rounded-3xl border border-slate-700 p-5">
             <div className="flex items-center gap-3 text-slate-400 uppercase tracking-[0.2em] text-xs">Closed jobs</div>
-            <div className="mt-4 text-4xl font-bold">{completedJobsCount}</div>
+            <div className="mt-4 text-4xl font-bold text-emerald-400">{completedJobsCount}</div>
             <div className="mt-2 text-slate-400">Total completed jobs</div>
           </div>
           )}
           <div className="bg-slate-800 rounded-3xl border border-slate-700 p-5">
+            <div className="flex items-center gap-3 text-slate-400 uppercase tracking-[0.2em] text-xs">Assigned jobs</div>
+            <div className="mt-4 text-4xl font-bold">{assignedJobsCount}</div>
+            <div className="mt-2 text-slate-400">Scheduled / not started</div>
+          </div>
+          <div className="bg-slate-800 rounded-3xl border border-slate-700 p-5">
+            <div className="flex items-center gap-3 text-slate-400 uppercase tracking-[0.2em] text-xs">Dispatched jobs</div>
+            <div className="mt-4 text-4xl font-bold">{dispatchedJobsCount}</div>
+            <div className="mt-2 text-slate-400">Tech en route or on site</div>
+          </div>
+          <div className="bg-slate-800 rounded-3xl border border-slate-700 p-5">
             <div className="flex items-center gap-3 text-slate-400 uppercase tracking-[0.2em] text-xs">Open jobs</div>
-            <div className="mt-4 text-4xl font-bold">{activeJobsCount}</div>
-            <div className="mt-2 text-slate-400">Not yet completed</div>
+            <div className="mt-4 text-4xl font-bold text-red-400">{activeJobsCount}</div>
+            <div className="mt-2 text-slate-400">Not yet assigned</div>
           </div>
         </section>
 
@@ -1569,7 +1627,7 @@ function App() {
                 className="flex-1 rounded-2xl bg-slate-800 border border-slate-600 px-4 py-2 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-teal-500"
               />
               <div className="flex flex-wrap gap-2">
-                {['All', 'Pending', 'Dispatched', 'On Site', 'Ready for Signoff'].map((s) => (
+                {['All', 'Pending', 'Assigned', 'Dispatched', 'On Site', 'Ready for Signoff'].map((s) => (
                   <button
                     key={s}
                     onClick={() => setJobStatusFilter(s)}
@@ -1594,7 +1652,7 @@ function App() {
                 const total = calcInvoiceTotal(job.consumables || [], job.serviceFee);
                 const beforeReady = Boolean(job.beforePhotoUrl);
                 const afterReady = Boolean(job.afterPhotoUrl);
-                const canRequestSignoff = profile.role === 'tech' && ['Dispatched', 'On Site'].includes(job.status) && beforeReady && afterReady;
+                const canRequestSignoff = profile.role === 'tech' && ['Assigned', 'Dispatched', 'En Route', 'On Site'].includes(job.status) && beforeReady && afterReady;
                 const canClientSignoff = profile.role === 'client' && job.status === 'Ready for Signoff' && !job.clientSignedOff;
 
                 return (
@@ -1603,7 +1661,7 @@ function App() {
                       <div>
                         <div className="flex items-center gap-2 text-xs uppercase tracking-[0.24em] text-slate-400 mb-3">
                           <span className={`inline-flex rounded-full px-3 py-1 ${job.status === 'Completed' ? 'bg-emerald-500/10 text-emerald-300' : job.status === 'Ready for Signoff' ? 'bg-orange-500/10 text-orange-300' : 'bg-teal-500/10 text-teal-300'}`}>
-                            {job.status}
+                            {getJobStatusLabel(job)}
                           </span>
                           {profile.role === 'admin' && (
                             <button
@@ -1965,6 +2023,14 @@ function App() {
                         {job.adminSignedOff && <div className="text-teal-300">Admin signed off{job.adminSignedOffAt ? ` � ${formatDate(job.adminSignedOffAt)}` : ''}</div>}
                       </div>
                       <div className="flex flex-wrap gap-3">
+                        {profile.role === 'tech' && !job.checkInAt && job.status !== 'En Route' && (
+                          <button
+                            onClick={() => updateDoc(doc(db, 'jobs', job.id), { status: 'En Route', enRouteAt: new Date(), updatedAt: new Date() })}
+                            className="rounded-2xl bg-amber-600 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-500 transition flex items-center gap-2"
+                          >
+                            <MapPin size={16} /> Start en route
+                          </button>
+                        )}
                         {profile.role === 'tech' && !job.checkInAt && (
                           <button
                             onClick={() => recordTechGeoEvent(job, 'checkIn')}
