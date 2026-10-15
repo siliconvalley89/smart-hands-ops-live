@@ -153,7 +153,10 @@ async function syncTechAvailability(email) {
   const db = admin.firestore();
   const techSnap = await db.collection('technicians').where('email', '==', email).limit(1).get();
   if (techSnap.empty) return;
-  const jobsSnap = await db.collection('jobs').where('assignedTechEmail', '==', email).get();
+  const jobsSnap = await db.collection('jobs')
+    .where('assignedTechEmail', '==', email)
+    .where('status', 'in', ACTIVE_FIELD_STATUSES)
+    .get();
   const busy = jobsSnap.docs.some((d) => {
     const j = d.data();
     return ACTIVE_FIELD_STATUSES.includes(j.status) && !j.checkOutAt;

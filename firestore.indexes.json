@@ -1,0 +1,47 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "jobs",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "assignedTechEmail", "order": "ASCENDING" },
+        { "fieldPath": "status", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "jobs",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "clientEmail", "order": "ASCENDING" },
+        { "fieldPath": "status", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "jobs",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "jobs",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "assignedTechEmail", "order": "ASCENDING" },
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "jobs",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "clientEmail", "order": "ASCENDING" },
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}

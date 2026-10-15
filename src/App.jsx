@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { db, storage, auth, messaging, VAPID_KEY } from './firebase';
-import { collection, onSnapshot, addDoc, query, orderBy, deleteDoc, doc, updateDoc, getDocs, getDoc, setDoc, where } from 'firebase/firestore';
+import { collection, onSnapshot, addDoc, query, orderBy, deleteDoc, doc, updateDoc, getDocs, getDoc, setDoc, where, limit, getCountFromServer } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { getToken } from 'firebase/messaging';
 import {
@@ -246,6 +246,10 @@ function App() {
   const [showAddUserPanel, setShowAddUserPanel] = useState(false);
   const [showUsersPanel, setShowUsersPanel] = useState(false);
   const [expandedJobIds, setExpandedJobIds] = useState([]);
+  const [completedJobsData, setCompletedJobsData] = useState([]);
+  const [completedLimit, setCompletedLimit] = useState(25);
+  const [completedLoading, setCompletedLoading] = useState(false);
+  const [completedTotal, setCompletedTotal] = useState(0);
   const [showJobsPanel, setShowJobsPanel] = useState(false);
   const [showCompletedJobsPanel, setShowCompletedJobsPanel] = useState(false);
   const [jobSearch, setJobSearch] = useState('');
@@ -344,13 +348,14 @@ function App() {
 
     setLoading(true);
 
+    // Only open jobs are streamed live; completed jobs are loaded on demand in pages
     let jobsQuery;
     if (profile.role === 'admin' || profile.role === 'adminAssistant') {
-      jobsQuery = query(collection(db, 'jobs'), orderBy('createdAt', 'desc'));
+      jobsQuery = query(collection(db, 'jobs'), where('status', '!=', 'Completed'));
     } else if (profile.role === 'tech') {
-      jobsQuery = query(collection(db, 'jobs'), where('assignedTechEmail', '==', profile.email || firebaseUser?.email || ''));
+      jobsQuery = query(collection(db, 'jobs'), where('assignedTechEmail', '==', profile.email || firebaseUser?.email || ''), where('status', '!=', 'Completed'));
     } else {
-      jobsQuery = query(collection(db, 'jobs'), where('clientEmail', '==', profile.email || firebaseUser?.email || ''));
+      jobsQuery = query(collection(db, 'jobs'), where('clientEmail', '==', profile.email || firebaseUser?.email || ''), where('status', '!=', 'Completed'));
     }
 
     const unsubscribe = onSnapshot(
@@ -379,6 +384,46 @@ function App() {
 
     return () => unsubscribe();
   }, [profile?.role, profile?.email, firebaseUser?.email]);
+
+  const COMPLETED_PAGE_SIZE = 25;
+  const scopedCompletedConstraints = () => {
+    const email = profile?.email || firebaseUser?.email || '';
+    if (profile?.role === 'tech') return [where('assignedTechEmail', '==', email), where('status', '==', 'Completed')];
+    if (profile?.role === 'client') return [where('clientEmail', '==', email), where('status', '==', 'Completed')];
+    return [where('status', '==', 'Completed')];
+  };
+
+  // Closed-jobs total via a cheap server-side count; refreshed whenever the open set changes size
+  useEffect(() => {
+    if (!profile?.role || profile.role === 'adminAssistant') return;
+    getCountFromServer(query(collection(db, 'jobs'), ...scopedCompletedConstraints()))
+      .then((snap) => setCompletedTotal(snap.data().count))
+      .catch((error) => console.error('Unable to count completed jobs', error));
+  }, [profile?.role, profile?.email, firebaseUser?.email, jobs.length]);
+
+  // Completed jobs: subscribe only while the panel is expanded, newest first, one page at a time
+  useEffect(() => {
+    if (!profile?.role || profile.role === 'adminAssistant' || !showCompletedJobsPanel) return () => {};
+    setCompletedLoading(true);
+    const completedQuery = query(
+      collection(db, 'jobs'),
+      ...scopedCompletedConstraints(),
+      orderBy('createdAt', 'desc'),
+      limit(completedLimit),
+    );
+    const unsubscribe = onSnapshot(
+      completedQuery,
+      (snapshot) => {
+        setCompletedJobsData(snapshot.docs.map((docItem) => ({ id: docItem.id, ...docItem.data() })));
+        setCompletedLoading(false);
+      },
+      (error) => {
+        console.error('Unable to load completed jobs', error);
+        setCompletedLoading(false);
+      }
+    );
+    return () => unsubscribe();
+  }, [profile?.role, profile?.email, firebaseUser?.email, showCompletedJobsPanel, completedLimit]);
 
   useEffect(() => {
     const q = query(collection(db, 'technicians'), orderBy('name', 'asc'));
@@ -1105,9 +1150,9 @@ function App() {
   const activeJobsCount = currentJobs.filter((job) => job.status !== 'Completed' && !job.assignedTechEmail && !isJobDispatched(job)).length;
   const assignedJobsCount = currentJobs.filter(isJobAssigned).length;
   const dispatchedJobsCount = currentJobs.filter(isJobDispatched).length;
-  const completedJobsCount = currentJobs.filter((job) => job.status === 'Completed').length;
+  const completedJobsCount = completedTotal;
   const activeJobs = currentJobs.filter((job) => job.status !== 'Completed');
-  const completedJobs = currentJobs.filter((job) => job.status === 'Completed');
+  const completedJobs = completedJobsData;
   const filteredActiveJobs = activeJobs.filter((job) => {
     const matchesStatus = jobStatusFilter === 'All'
       || (jobStatusFilter === 'Assigned' ? isJobAssigned(job)
@@ -2178,10 +2223,10 @@ function App() {
                 onChange={(e) => setCompletedSearch(e.target.value)}
                 className="rounded-2xl bg-slate-800 border border-slate-600 px-4 py-2 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-teal-500"
               />
-              {loading ? (
-                <div className="rounded-3xl bg-slate-950/70 p-8 text-center text-slate-400">Loading jobs�</div>
+              {loading || (completedLoading && completedJobs.length === 0) ? (
+                <div className="rounded-3xl bg-slate-950/70 p-8 text-center text-slate-400">Loading jobs...</div>
               ) : filteredCompletedJobs.length === 0 ? (
-                <div className="rounded-3xl bg-slate-950/70 p-8 text-center text-slate-400">{completedJobs.length === 0 ? 'No completed jobs yet.' : 'No jobs match your search.'}</div>
+                <div className="rounded-3xl bg-slate-950/70 p-8 text-center text-slate-400">{completedJobs.length === 0 ? 'No completed jobs yet.' : 'No loaded jobs match your search. Try loading more.'}</div>
               ) : (
                 <div className="space-y-6">
                   {filteredCompletedJobs.map((job) => (
@@ -2283,6 +2328,15 @@ function App() {
                       </div>
                     </div>
                   ))}
+                  {completedJobs.length >= completedLimit && completedJobs.length < completedTotal && (
+                    <button
+                      type="button"
+                      onClick={() => setCompletedLimit((prev) => prev + COMPLETED_PAGE_SIZE)}
+                      className="w-full rounded-2xl border border-slate-600 px-4 py-3 text-sm text-slate-200 hover:bg-slate-700 transition"
+                    >
+                      Load more ({completedJobs.length} of {completedTotal})
+                    </button>
+                  )}
                 </div>
               )}
             </div>
