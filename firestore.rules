@@ -85,11 +85,11 @@ service cloud.firestore {
     match /jobs/{jobId} {
       allow read: if isSignedIn() && (
         isAdmin() ||
-        (isAdminAssistant() && resource.data.status != 'Completed' && jobHasNoEmbeddedBilling(resource.data)) ||
+        (isAdminAssistant() && resource.data.status != 'Completed' && resource.data.get('billingMigrated', false) == true) ||
         (isClient() && resource.data.clientEmail == request.auth.token.email) ||
         (isTech() &&
           resource.data.assignedTechEmail == request.auth.token.email &&
-          jobHasNoEmbeddedBilling(resource.data))
+          resource.data.get('billingMigrated', false) == true)
       );
 
       allow create: if isSignedIn() && (

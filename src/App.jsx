@@ -514,10 +514,13 @@ function App() {
 
     // Only open jobs are streamed live; completed jobs are loaded on demand in pages
     let jobsQuery;
-    if (profile.role === 'admin' || profile.role === 'adminAssistant') {
+    // Security rules cannot be evaluated per-document for list queries, so tech/assistant queries must filter on billingMigrated
+    if (profile.role === 'admin') {
       jobsQuery = query(collection(db, 'jobs'), where('status', '!=', 'Completed'));
+    } else if (profile.role === 'adminAssistant') {
+      jobsQuery = query(collection(db, 'jobs'), where('billingMigrated', '==', true), where('status', '!=', 'Completed'));
     } else if (profile.role === 'tech') {
-      jobsQuery = query(collection(db, 'jobs'), where('assignedTechEmail', '==', profile.email || firebaseUser?.email || ''), where('status', '!=', 'Completed'));
+      jobsQuery = query(collection(db, 'jobs'), where('assignedTechEmail', '==', profile.email || firebaseUser?.email || ''), where('billingMigrated', '==', true), where('status', '!=', 'Completed'));
     } else {
       jobsQuery = query(collection(db, 'jobs'), where('clientEmail', '==', profile.email || firebaseUser?.email || ''), where('status', '!=', 'Completed'));
     }
@@ -552,7 +555,7 @@ function App() {
   const COMPLETED_PAGE_SIZE = 25;
   const scopedCompletedConstraints = () => {
     const email = profile?.email || firebaseUser?.email || '';
-    if (profile?.role === 'tech') return [where('assignedTechEmail', '==', email), where('status', '==', 'Completed')];
+    if (profile?.role === 'tech') return [where('assignedTechEmail', '==', email), where('billingMigrated', '==', true), where('status', '==', 'Completed')];
     if (profile?.role === 'client') return [where('clientEmail', '==', email), where('status', '==', 'Completed')];
     return [where('status', '==', 'Completed')];
   };
