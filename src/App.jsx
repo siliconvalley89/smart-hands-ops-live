@@ -613,6 +613,11 @@ function App() {
         },
         (error) => {
           console.error(`Unable to load consumables for job ${jobId}`, error);
+          // Access is lost when a job is reassigned or completed; the jobs listener removes it shortly after
+          if (error?.code === 'permission-denied') {
+            setJobConsumables((prev) => ({ ...prev, [jobId]: [] }));
+            return;
+          }
           if (!suppressAuthStateRef.current) setAppError('Unable to load job consumables.');
         },
       ));
