@@ -31,6 +31,7 @@ import {
   Plus,
   FileText,
   Shield,
+  Download,
 } from 'lucide-react';
 
 const formatDate = (value) => {
@@ -80,7 +81,11 @@ const formatSchedule = (job) => {
   const hhmm = (d) => `${pad(d.getHours())}${pad(d.getMinutes())}`;
   const datePart = s.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' });
   const end = toMillis(job.scheduledEnd);
-  return `${datePart} ${hhmm(s)}${end != null ? `-${hhmm(new Date(end))}` : ''}`;
+  if (end == null) return `${datePart} ${hhmm(s)}`;
+  const e = new Date(end);
+  const nextDay = e.toDateString() !== s.toDateString();
+  const endDatePart = nextDay ? e.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' }) + ' ' : '';
+  return `${datePart} ${hhmm(s)}-${endDatePart}${hhmm(e)}`;
 };
 
 const findTechConflict = (targetJob, techEmail, allJobs) => {
@@ -161,6 +166,141 @@ const loadImageDataUrl = async (url) => {
     reader.onerror = reject;
     reader.readAsDataURL(blob);
   });
+};
+
+const loadImageElement = (src) => new Promise((resolve, reject) => {
+  const img = new Image();
+  img.onload = () => resolve(img);
+  img.onerror = reject;
+  img.src = src;
+});
+
+const fileToSquareDataUrl = async (file, size) => {
+  const objectUrl = URL.createObjectURL(file);
+  try {
+    const img = await loadImageElement(objectUrl);
+    const canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+    const scale = Math.max(size / img.width, size / img.height);
+    const w = img.width * scale;
+    const h = img.height * scale;
+    canvas.getContext('2d').drawImage(img, (size - w) / 2, (size - h) / 2, w, h);
+    return canvas.toDataURL('image/jpeg', 0.85);
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+};
+
+const renderBadge = async (profile, uid) => {
+  {
+    const W = 638;
+    const H = 1011;
+    const canvas = document.createElement('canvas');
+    canvas.width = W;
+    canvas.height = H;
+    const ctx = canvas.getContext('2d');
+
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = '#0f172a';
+    ctx.fillRect(0, 0, W, 170);
+    ctx.fillStyle = '#f59e0b';
+    ctx.fillRect(0, 170, W, 10);
+
+    ctx.fillStyle = '#ffffff';
+    ctx.textAlign = 'center';
+    ctx.font = 'bold 40px Arial, sans-serif';
+    ctx.fillText('SILICON VALLEY', W / 2, 72);
+    ctx.fillText('SMART HANDS LLC', W / 2, 122);
+
+    const photo = await loadImageElement(profile.profilePhotoData || await loadImageDataUrl(profile.profilePhotoUrl));
+    const cx = W / 2;
+    const cy = 335;
+    const r = 130;
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.clip();
+    const scale = Math.max((r * 2) / photo.width, (r * 2) / photo.height);
+    const pw = photo.width * scale;
+    const ph = photo.height * scale;
+    ctx.drawImage(photo, cx - pw / 2, cy - ph / 2, pw, ph);
+    ctx.restore();
+    ctx.lineWidth = 8;
+    ctx.strokeStyle = '#f59e0b';
+    ctx.beginPath();
+    ctx.arc(cx, cy, r + 4, 0, Math.PI * 2);
+    ctx.stroke();
+
+    const name = profile.displayName || 'Staff';
+    ctx.fillStyle = '#0f172a';
+    let size = 50;
+    ctx.font = `bold ${size}px Arial, sans-serif`;
+    while (ctx.measureText(name).width > W - 60 && size > 24) {
+      size -= 2;
+      ctx.font = `bold ${size}px Arial, sans-serif`;
+    }
+    ctx.fillText(name, W / 2, 530);
+
+    ctx.fillStyle = '#b45309';
+    ctx.font = 'bold 32px Arial, sans-serif';
+    const roleText = (profile.role === 'adminAssistant' ? 'Admin Assistant' : profile.role || 'Staff').toUpperCase();
+    ctx.fillText(roleText, W / 2, 577);
+
+    ctx.fillStyle = '#475569';
+    ctx.font = '24px Arial, sans-serif';
+    ctx.fillText(`ID: ${uid.slice(0, 8).toUpperCase()}`, W / 2, 615);
+
+    const qrSize = 200;
+    const QRCode = (await import('qrcode')).default;
+    const qrCanvas = document.createElement('canvas');
+    await QRCode.toCanvas(qrCanvas, `${window.location.origin}/verify/${uid}`, { width: qrSize, margin: 1, errorCorrectionLevel: 'M' });
+    ctx.drawImage(qrCanvas, (W - qrSize) / 2, 640, qrSize, qrSize);
+    ctx.fillStyle = '#475569';
+    ctx.font = 'bold 20px Arial, sans-serif';
+    ctx.fillText('SCAN TO VERIFY BADGE', W / 2, 868);
+
+    const logo = await loadImageElement(logoPath);
+    const lh = 80;
+    const lw = Math.min((logo.width / logo.height) * lh, W - 120);
+    ctx.drawImage(logo, (W - lw) / 2, 895, lw, lh);
+
+    ctx.strokeStyle = '#0f172a';
+    ctx.lineWidth = 4;
+    ctx.strokeRect(2, 2, W - 4, H - 4);
+
+    const thumb = document.createElement('canvas');
+    thumb.width = 300;
+    thumb.height = 300;
+    const ts = Math.max(300 / photo.width, 300 / photo.height);
+    thumb.getContext('2d').drawImage(photo, (300 - photo.width * ts) / 2, (300 - photo.height * ts) / 2, photo.width * ts, photo.height * ts);
+    return { dataUrl: canvas.toDataURL('image/jpeg', 0.95), photoData: thumb.toDataURL('image/jpeg', 0.8) };
+  }
+};
+
+const prepareBadge = async (profile, uid) => {
+  const result = await renderBadge(profile, uid);
+  await setDoc(doc(db, 'badges', uid), {
+    displayName: profile.displayName || '',
+    role: profile.role || '',
+    photoData: result.photoData,
+    updatedAt: Date.now(),
+  });
+  return result.dataUrl;
+};
+
+const generateBadgePdf = async (profile, uid, onError) => {
+  try {
+    const dataUrl = await prepareBadge(profile, uid);
+    const { jsPDF } = await import('jspdf');
+    const pdf = new jsPDF({ unit: 'mm', format: [53.98, 85.6], orientation: 'portrait' });
+    pdf.addImage(dataUrl, 'JPEG', 0, 0, 53.98, 85.6);
+    pdf.save(`badge-${(profile.displayName || 'staff').replace(/\s+/g, '-').toLowerCase()}.pdf`);
+  } catch (error) {
+    console.error('Badge generation failed', error);
+    onError?.('Badge generation failed. Please re-upload your profile photo and try again.');
+  }
 };
 
 const generateInvoicePdf = async (job, onError) => {
@@ -279,6 +419,7 @@ function App() {
   const [resetError, setResetError] = useState('');
   const [showResetForm, setShowResetForm] = useState(false);
   const [profilePhotoUploadBusy, setProfilePhotoUploadBusy] = useState(false);
+  const [badgeViewUrl, setBadgeViewUrl] = useState(null);
   const [geoEventBusyJobId, setGeoEventBusyJobId] = useState(null);
   const [billingMigrationBusy, setBillingMigrationBusy] = useState(false);
   const [billingMigrationMessage, setBillingMigrationMessage] = useState('');
@@ -690,9 +831,9 @@ function App() {
         const [h, m] = requestForm.scheduledEndTime.split(':').map(Number);
         scheduledEndDate = new Date(scheduledDate);
         scheduledEndDate.setHours(h, m, 0, 0);
+        // An end time at or before the start time means the job rolls overnight into the next day
         if (scheduledEndDate <= scheduledDate) {
-          setRequestError('End time must be after the start time.');
-          return;
+          scheduledEndDate.setDate(scheduledEndDate.getDate() + 1);
         }
       }
       const nearest = findNearestTechnician(geo.lat, geo.lng, { scheduledFor: scheduledDate, scheduledEnd: scheduledEndDate });
@@ -981,6 +1122,7 @@ function App() {
     }
     try {
       await deleteDoc(doc(db, 'users', userId));
+      await deleteDoc(doc(db, 'badges', userId)).catch(() => {});
       if (userRole === 'tech') {
         await deleteDoc(doc(db, 'technicians', userId));
       }
@@ -1199,8 +1341,9 @@ function App() {
       const storageRef = ref(storage, `users/${firebaseUser.uid}/profile-photo`);
       await uploadBytes(storageRef, file);
       const url = await getDownloadURL(storageRef);
-      await updateDoc(doc(db, 'users', firebaseUser.uid), { profilePhotoUrl: url });
-      setProfile((prev) => ({ ...prev, profilePhotoUrl: url }));
+      const profilePhotoData = await fileToSquareDataUrl(file, 400);
+      await updateDoc(doc(db, 'users', firebaseUser.uid), { profilePhotoUrl: url, profilePhotoData });
+      setProfile((prev) => ({ ...prev, profilePhotoUrl: url, profilePhotoData }));
     } catch (error) {
       console.error('Profile photo upload failed', error);
       setAppError('Profile photo upload failed.');
@@ -1497,6 +1640,12 @@ function App() {
       </nav>
 
       <main className="max-w-6xl mx-auto p-4 space-y-6">
+        {badgeViewUrl && (
+          <div className="fixed inset-0 z-[100] bg-black flex flex-col items-center justify-center p-3" onClick={() => setBadgeViewUrl(null)}>
+            <img src={badgeViewUrl} alt="Staff badge" className="max-h-[calc(100dvh-4rem)] max-w-full object-contain rounded-xl" />
+            <button type="button" className="mt-3 rounded-xl bg-slate-700 px-6 py-2 text-white text-sm font-semibold">Close</button>
+          </div>
+        )}
         {appError && (
           <div className="rounded-3xl bg-red-900/20 border border-red-700 p-4 text-red-100">
             {appError}
@@ -1526,6 +1675,31 @@ function App() {
             </div>
             {profile.role !== 'client' && !profile.profilePhotoUrl && (
               <div className="mt-2 text-amber-400 text-xs">Photo required</div>
+            )}
+            {profile.role !== 'client' && profile.profilePhotoUrl && (
+              <button
+                type="button"
+                onClick={() => generateBadgePdf(profile, firebaseUser.uid, setAppError)}
+                className="mt-3 inline-flex items-center gap-1 rounded-xl border border-slate-600 bg-slate-700 hover:bg-slate-600 px-3 py-1.5 text-xs font-semibold text-slate-200"
+              >
+                <Download size={12} /> Download badge
+              </button>
+            )}
+            {profile.role !== 'client' && profile.profilePhotoUrl && (
+              <button
+                type="button"
+                onClick={async () => {
+                  try {
+                    setBadgeViewUrl(await prepareBadge(profile, firebaseUser.uid));
+                  } catch (error) {
+                    console.error('Badge display failed', error);
+                    setAppError('Badge generation failed. Please re-upload your profile photo and try again.');
+                  }
+                }}
+                className="mt-3 ml-2 inline-flex items-center gap-1 rounded-xl bg-amber-600 hover:bg-amber-500 px-3 py-1.5 text-xs font-semibold text-white"
+              >
+                Show on phone
+              </button>
             )}
           </div>
           {!isAssistant && (
@@ -1678,7 +1852,7 @@ function App() {
                   />
                 </label>
                 <label className="block">
-                  <span className="text-slate-300 text-sm">End time <span className="text-slate-500 text-xs">(same day)</span></span>
+                  <span className="text-slate-300 text-sm">End time <span className="text-slate-500 text-xs">(earlier than start = next day)</span></span>
                   <input
                     type="time"
                     value={requestForm.scheduledEndTime}

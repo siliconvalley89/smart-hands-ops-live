@@ -47,6 +47,12 @@ service cloud.firestore {
         (isAdmin() || (isTech() && job.assignedTechEmail == request.auth.token.email));
     }
 
+    match /badges/{badgeId} {
+      allow read: if true;
+      allow create, update: if isSignedIn() && request.auth.uid == badgeId && !isClient();
+      allow delete: if isAdmin();
+    }
+
     match /users/{userId} {
       allow read: if isSignedIn() && (request.auth.uid == userId || isAdmin());
       allow create: if isSignedIn() && (
@@ -61,7 +67,7 @@ service cloud.firestore {
       // Admins can do full updates; users can update only their own fcmToken, mustChangePassword and profilePhotoUrl fields
       allow update: if isAdmin() ||
         (isSignedIn() && request.auth.uid == userId &&
-         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['fcmToken', 'mustChangePassword', 'profilePhotoUrl']));
+         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['fcmToken', 'mustChangePassword', 'profilePhotoUrl', 'profilePhotoData']));
       allow delete: if isAdmin();
     }
 

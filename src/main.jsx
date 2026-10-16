@@ -3,6 +3,9 @@ import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App.jsx'
 import InstallAppButton from './InstallAppButton.jsx'
+import VerifyBadge from './VerifyBadge.jsx'
+
+const verifyMatch = window.location.pathname.match(/^\/verify\/([A-Za-z0-9]+)\/?$/)
 
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
@@ -16,7 +19,13 @@ if ('serviceWorker' in navigator) {
 
 createRoot(document.getElementById('root')).render(
   <StrictMode>
-    <App />
-    <InstallAppButton />
+    {verifyMatch ? (
+      <VerifyBadge uid={verifyMatch[1]} />
+    ) : (
+      <>
+        <App />
+        <InstallAppButton />
+      </>
+    )}
   </StrictMode>,
 )
