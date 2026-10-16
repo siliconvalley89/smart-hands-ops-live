@@ -1199,6 +1199,9 @@ function App() {
       setAppError('Cannot delete service fee after the invoice has been sent.');
       return;
     }
+    if (!window.confirm('Are you sure you want to delete the service fee? This action cannot be undone.')) {
+      return;
+    }
     try {
       await setDoc(doc(db, 'jobBilling', job.id), {
         serviceFee: 0,
@@ -1264,6 +1267,7 @@ function App() {
       setAppError('Cannot delete consumables after the invoice has been sent.');
       return;
     }
+    if (!window.confirm('Are you sure you want to delete this consumable? This action cannot be undone.')) return;
     const item = (job.consumables || []).find((line) => line.id === itemId);
     if (!item) return;
     try {
@@ -1361,6 +1365,7 @@ function App() {
   };
 
   const deletePhoto = async (jobId, type) => {
+    if (!window.confirm(`Are you sure you want to delete the ${type} photo? This action cannot be undone.`)) return;
     try {
       await updateDoc(doc(db, 'jobs', jobId), {
         [`${type}PhotoUrl`]: '',
@@ -1373,6 +1378,7 @@ function App() {
   };
 
   const handleDelete = async (jobId) => {
+    if (!window.confirm('Are you sure you want to delete this job? This action cannot be undone.')) return;
     try {
       await deleteDoc(doc(db, 'jobs', jobId));
     } catch (error) {
