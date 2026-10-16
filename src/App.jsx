@@ -383,6 +383,14 @@ function App() {
   const [loginPassword, setLoginPassword] = useState('');
   const [loginError, setLoginError] = useState('');
   const [appError, setAppError] = useState('');
+  const [confirmDialog, setConfirmDialog] = useState(null);
+  const askConfirm = (message, confirmLabel = 'Delete') => new Promise((resolve) => {
+    setConfirmDialog({ message, confirmLabel, resolve });
+  });
+  const closeConfirm = (result) => {
+    confirmDialog?.resolve(result);
+    setConfirmDialog(null);
+  };
   const [jobs, setJobs] = useState([]);
   const [jobBilling, setJobBilling] = useState({});
   const [jobConsumables, setJobConsumables] = useState({});
@@ -1125,7 +1133,7 @@ function App() {
       setAccountMessage('You cannot delete your own admin account from this panel.');
       return;
     }
-    if (!window.confirm('Are you sure you want to delete this user? This action cannot be undone.')) {
+    if (!(await askConfirm('Are you sure you want to delete this user? This action cannot be undone.'))) {
       return;
     }
     try {
@@ -1199,7 +1207,7 @@ function App() {
       setAppError('Cannot delete service fee after the invoice has been sent.');
       return;
     }
-    if (!window.confirm('Are you sure you want to delete the service fee? This action cannot be undone.')) {
+    if (!(await askConfirm('Are you sure you want to delete the service fee? This action cannot be undone.'))) {
       return;
     }
     try {
@@ -1267,7 +1275,7 @@ function App() {
       setAppError('Cannot delete consumables after the invoice has been sent.');
       return;
     }
-    if (!window.confirm('Are you sure you want to delete this consumable? This action cannot be undone.')) return;
+    if (!(await askConfirm('Are you sure you want to delete this consumable? This action cannot be undone.'))) return;
     const item = (job.consumables || []).find((line) => line.id === itemId);
     if (!item) return;
     try {
@@ -1285,7 +1293,7 @@ function App() {
 
   const migrateJobBillingData = async () => {
     if (profile?.role !== 'admin' || billingMigrationBusy) return;
-    if (!window.confirm('Move existing job prices into protected billing records? Technicians will be unable to view jobs until each job is migrated.')) return;
+    if (!(await askConfirm('Move existing job prices into protected billing records? Technicians will be unable to view jobs until each job is migrated.', 'Continue'))) return;
     setBillingMigrationBusy(true);
     setBillingMigrationMessage('');
     try {
@@ -1365,7 +1373,7 @@ function App() {
   };
 
   const deletePhoto = async (jobId, type) => {
-    if (!window.confirm(`Are you sure you want to delete the ${type} photo? This action cannot be undone.`)) return;
+    if (!(await askConfirm(`Are you sure you want to delete the ${type} photo? This action cannot be undone.`))) return;
     try {
       await updateDoc(doc(db, 'jobs', jobId), {
         [`${type}PhotoUrl`]: '',
@@ -1378,7 +1386,7 @@ function App() {
   };
 
   const handleDelete = async (jobId) => {
-    if (!window.confirm('Are you sure you want to delete this job? This action cannot be undone.')) return;
+    if (!(await askConfirm('Are you sure you want to delete this job? This action cannot be undone.'))) return;
     try {
       await deleteDoc(doc(db, 'jobs', jobId));
     } catch (error) {
@@ -1430,7 +1438,7 @@ function App() {
     const conflict = canStaffManage ? findTechConflict(job, tech.email, jobs) : null;
     if (conflict) {
       const when = conflict.scheduledFor ? formatSchedule(conflict) : 'now';
-      const confirmed = window.confirm(`${tech.name} is already assigned to another job (${conflict.client || conflict.task || 'job'}, ${when}) during this window. Assign them to this job anyway?`);
+      const confirmed = await askConfirm(`${tech.name} is already assigned to another job (${conflict.client || conflict.task || 'job'}, ${when}) during this window. Assign them to this job anyway?`, 'Assign anyway');
       if (!confirmed) return;
     }
 
@@ -1631,6 +1639,21 @@ function App() {
 
   return (
     <div className="min-h-screen bg-slate-900 text-slate-100 font-sans pb-20">
+      {confirmDialog && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 p-4" onClick={() => closeConfirm(false)}>
+          <div role="alertdialog" aria-modal="true" className="w-full max-w-md rounded-3xl border border-slate-700 bg-slate-800 p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <p className="text-slate-100 text-base leading-relaxed">{confirmDialog.message}</p>
+            <div className="mt-6 flex justify-end gap-3">
+              <button type="button" autoFocus onClick={() => closeConfirm(false)} className="rounded-2xl border border-slate-600 px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-700 transition">
+                Cancel
+              </button>
+              <button type="button" onClick={() => closeConfirm(true)} className="rounded-2xl bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-500 transition">
+                {confirmDialog.confirmLabel}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       <nav className="bg-slate-800 border-b border-slate-700 p-4 sticky top-0 z-50">
         <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
           <div className="flex items-center gap-3">
