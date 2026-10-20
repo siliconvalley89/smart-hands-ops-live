@@ -134,7 +134,7 @@ service cloud.firestore {
             'status', 'enRouteAt', 'updatedAt',
             'checkInAt', 'checkInLat', 'checkInLng',
             'checkOutAt', 'checkOutLat', 'checkOutLng',
-            'breaks', 'beforePhotoUrl', 'afterPhotoUrl', 'beforePhotos', 'afterPhotos', 'signoffRequestedAt'
+            'breaks', 'beforePhotoUrl', 'afterPhotoUrl', 'beforePhotos', 'afterPhotos', 'attachments', 'signoffRequestedAt'
           ]) &&
           request.resource.data.status in ['Assigned', 'Dispatched', 'En Route', 'On Site', 'Ready for Signoff']) ||
         // Clients can only set clientSignedOff on their own jobs; no other fields

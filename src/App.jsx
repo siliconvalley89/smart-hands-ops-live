@@ -47,6 +47,14 @@ const getJobPhotos = (job, type) => {
   return legacy && !list.includes(legacy) ? [legacy, ...list] : list;
 };
 
+const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
+const ATTACHMENT_ACCEPT = '.pdf,.doc,.docx,.xls,.xlsx,.xlsm,.csv,.ppt,.pptx,.txt,.zip,image/*';
+
+const formatFileSize = (bytes) => {
+  if (!bytes) return '';
+  return bytes >= 1024 * 1024 ? `${(bytes / (1024 * 1024)).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
+};
+
 const JOB_WINDOW_MS = 2 * 60 * 60 * 1000;
 
 const toMillis = (value) => {
@@ -404,6 +412,7 @@ function App() {
   const [techs, setTechs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [uploadingId, setUploadingId] = useState(null);
+  const [uploadingFilesId, setUploadingFilesId] = useState(null);
   const [requestForm, setRequestForm] = useState({ name: '', email: '', phone: '', location: '', service: '', details: '', serialNumber: '', scheduledFor: '', scheduledEndTime: '' });
   const [requestSuccess, setRequestSuccess] = useState('');
   const [requestError, setRequestError] = useState('');
@@ -1371,6 +1380,55 @@ function App() {
     }
   };
 
+  const handleAttachmentUpload = async (event, job) => {
+    const files = Array.from(event.target.files || []);
+    event.target.value = '';
+    if (!files.length) return;
+    const tooBig = files.filter((f) => f.size >= MAX_ATTACHMENT_BYTES);
+    const valid = files.filter((f) => f.size < MAX_ATTACHMENT_BYTES);
+    if (tooBig.length) setAppError(`Skipped ${tooBig.length} file(s) over 10 MB.`);
+    if (!valid.length) return;
+    try {
+      setUploadingFilesId(job.id);
+      const results = await Promise.allSettled(valid.map(async (file, i) => {
+        const safeName = file.name.replace(/[^\w.-]/g, '_');
+        const storageRef = ref(storage, `jobs/${job.id}/file-${Date.now()}-${i}-${safeName}`);
+        await uploadBytes(storageRef, file);
+        return { name: file.name, url: await getDownloadURL(storageRef), size: file.size, type: file.type || '' };
+      }));
+      const uploaded = results.filter((r) => r.status === 'fulfilled').map((r) => r.value);
+      if (uploaded.length) {
+        const snap = await getDoc(doc(db, 'jobs', job.id));
+        const current = snap.exists() ? snap.data() : job;
+        await updateDoc(doc(db, 'jobs', job.id), {
+          attachments: [...(current.attachments || []), ...uploaded],
+          updatedAt: new Date(),
+        });
+      }
+      if (uploaded.length < valid.length) setAppError(`${valid.length - uploaded.length} file(s) failed to upload.`);
+    } catch (error) {
+      console.error('File upload failed', error);
+      setAppError('File upload failed.');
+    } finally {
+      setUploadingFilesId(null);
+    }
+  };
+
+  const deleteAttachment = async (job, file) => {
+    if (!(await askConfirm(`Delete "${file.name}"? This action cannot be undone.`))) return;
+    try {
+      const snap = await getDoc(doc(db, 'jobs', job.id));
+      const current = snap.exists() ? snap.data() : job;
+      await updateDoc(doc(db, 'jobs', job.id), {
+        attachments: (current.attachments || []).filter((a) => a.url !== file.url),
+        updatedAt: new Date(),
+      });
+    } catch (error) {
+      console.error('Delete file failed', error);
+      setAppError('Unable to delete file.');
+    }
+  };
+
   const handleProfilePhotoUpload = async (event) => {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -2304,6 +2362,37 @@ function App() {
                               </div>
                             );
                           })}
+                          <div className="rounded-2xl bg-slate-900 p-3 border border-slate-700">
+                            <div className="text-slate-300 text-sm mb-2 flex items-center gap-2">
+                              <FileText size={15} /> Files &amp; documents {(job.attachments || []).length > 0 && `(${job.attachments.length})`}
+                              {uploadingFilesId === job.id && <span className="text-teal-300 text-xs">Uploading...</span>}
+                            </div>
+                            {(job.attachments || []).length ? (
+                              <ul className="space-y-2">
+                                {job.attachments.map((file) => (
+                                  <li key={file.url} className="flex items-center gap-2 rounded-xl border border-slate-700 bg-slate-800 px-3 py-2 text-sm">
+                                    <a href={file.url} target="_blank" rel="noreferrer" download={file.name} className="flex-1 min-w-0 truncate text-teal-300 hover:underline">{file.name}</a>
+                                    <span className="text-slate-500 text-xs shrink-0">{formatFileSize(file.size)}</span>
+                                    {['tech', 'admin'].includes(profile.role) && (
+                                      <button type="button" aria-label={`Delete ${file.name}`} onClick={() => deleteAttachment(job, file)} className="text-red-300 hover:text-red-200">
+                                        <Trash2 size={14} />
+                                      </button>
+                                    )}
+                                  </li>
+                                ))}
+                              </ul>
+                            ) : (
+                              <div className="rounded-2xl border border-dashed border-slate-700 p-4 text-center text-slate-500 text-sm">No files yet</div>
+                            )}
+                            {['tech', 'admin'].includes(profile.role) && (
+                              <div className="mt-3">
+                                <label htmlFor={`attach-${job.id}`} className="cursor-pointer inline-flex items-center gap-2 rounded-2xl border border-slate-600 bg-slate-800 px-3 py-2 text-sm text-slate-200 hover:bg-slate-700 transition">
+                                  <Plus size={15} /> Add files
+                                </label>
+                                <input id={`attach-${job.id}`} type="file" multiple className="hidden" accept={ATTACHMENT_ACCEPT} onChange={(e) => handleAttachmentUpload(e, job)} />
+                              </div>
+                            )}
+                          </div>
                         </div>
                       </div>
 
