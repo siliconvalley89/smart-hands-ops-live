@@ -79,7 +79,12 @@ service cloud.firestore {
         request.resource.data.uid == request.auth.uid &&
         request.resource.data.email == request.auth.token.email
       );
-      allow update, delete: if isAdmin();
+      allow update: if isAdmin() || (
+        isTech() &&
+        request.auth.uid == techId &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['profilePhotoUrl'])
+      );
+      allow delete: if isAdmin();
     }
 
     match /jobs/{jobId} {

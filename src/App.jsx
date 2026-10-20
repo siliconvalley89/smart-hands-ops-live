@@ -47,6 +47,23 @@ const getJobPhotos = (job, type) => {
   return legacy && !list.includes(legacy) ? [legacy, ...list] : list;
 };
 
+const TechNameWithPhoto = ({ job, techs }) => {
+  const tech = (techs || []).find((t) => t.email && t.email === job.assignedTechEmail);
+  const photo = tech?.profilePhotoUrl;
+  return (
+    <div className="flex items-center justify-end gap-2">
+      {job.assignedTechName && (photo ? (
+        <img src={photo} alt={job.assignedTechName} className="h-9 w-9 rounded-full object-cover ring-2 ring-slate-600" />
+      ) : (
+        <div className="h-9 w-9 rounded-full bg-slate-700 text-slate-300 flex items-center justify-center text-sm font-semibold">
+          {job.assignedTechName.trim().charAt(0).toUpperCase()}
+        </div>
+      ))}
+      <div className="font-semibold">{job.assignedTechName || 'Unassigned'}</div>
+    </div>
+  );
+};
+
 const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 const ATTACHMENT_ACCEPT = '.pdf,.doc,.docx,.xls,.xlsx,.xlsm,.csv,.ppt,.pptx,.txt,.zip,image/*';
 
@@ -367,13 +384,19 @@ const generateInvoicePdf = async (job, onError) => {
     pdf.setFontSize(10);
     pdf.text('Thank you for choosing Silicon Valley Smart Hands LLC.', 40, footerY);
     pdf.save(`SV-Smart-Dispatch-Invoice-${job.id}.pdf`);
+  } catch (error) {
+    console.error('Invoice generation failed', error);
+    onError('Unable to generate invoice PDF.');
+    return;
+  }
+  // The PDF is already downloaded; marking it sent is best-effort (clients lack permission to write this)
+  try {
     await updateDoc(doc(db, 'jobs', job.id), {
       invoiceSent: true,
       invoiceSentAt: new Date(),
     });
   } catch (error) {
-    console.error('Invoice generation failed', error);
-    onError('Unable to generate invoice PDF.');
+    console.warn('Could not mark invoice as sent', error);
   }
 };
 
@@ -674,6 +697,14 @@ function App() {
     });
     return () => unsubscribe();
   }, []);
+
+  useEffect(() => {
+    if (profile?.role !== 'tech' || !profile.profilePhotoUrl || !firebaseUser?.uid) return;
+    const mine = techs.find((t) => t.id === firebaseUser.uid);
+    if (mine && mine.profilePhotoUrl !== profile.profilePhotoUrl) {
+      updateDoc(doc(db, 'technicians', firebaseUser.uid), { profilePhotoUrl: profile.profilePhotoUrl }).catch((e) => console.warn('Tech photo sync failed', e));
+    }
+  }, [techs, profile?.role, profile?.profilePhotoUrl, firebaseUser?.uid]);
 
   useEffect(() => {
     if (profile?.role !== 'admin') {
@@ -1057,8 +1088,8 @@ function App() {
       setGeoEventBusyJobId(job.id);
       const coords = await getCurrentCoordinates();
 
-      // Geofence: require tech to be within 1,000 ft of the job site for check-in / check-out
-      if ((eventType === 'checkIn' || eventType === 'checkOut') && job.lat != null && job.lng != null) {
+      // Geofence: require tech to be within 1,000 ft of the job site for check-in / check-out (admins can override per job)
+      if ((eventType === 'checkIn' || eventType === 'checkOut') && job.lat != null && job.lng != null && !job.geofenceOverride) {
         const distMiles = calculateDistanceMiles(job.lat, job.lng, coords.lat, coords.lng);
         const distFeet = Math.round(distMiles * 5280);
         if (distFeet > 1000) {
@@ -1332,6 +1363,10 @@ function App() {
   };
 
   const requestClientSignoff = async (job) => {
+    if (!job.checkInAt) {
+      setAppError('You must check in on site before requesting sign-off.');
+      return;
+    }
     await updateDoc(doc(db, 'jobs', job.id), {
       status: 'Ready for Signoff',
       signoffRequestedAt: new Date(),
@@ -1441,6 +1476,10 @@ function App() {
       const profilePhotoData = await fileToSquareDataUrl(file, 400);
       await updateDoc(doc(db, 'users', firebaseUser.uid), { profilePhotoUrl: url, profilePhotoData });
       setProfile((prev) => ({ ...prev, profilePhotoUrl: url, profilePhotoData }));
+      if (profile?.role === 'tech') {
+        // Mirror to the technicians doc so clients can see the photo
+        await updateDoc(doc(db, 'technicians', firebaseUser.uid), { profilePhotoUrl: url }).catch((e) => console.warn('Tech photo sync failed', e));
+      }
     } catch (error) {
       console.error('Profile photo upload failed', error);
       setAppError('Profile photo upload failed.');
@@ -2231,7 +2270,7 @@ function App() {
                 const total = calcInvoiceTotal(job.consumables || [], job.serviceFee);
                 const beforeReady = getJobPhotos(job, 'before').length > 0;
                 const afterReady = getJobPhotos(job, 'after').length > 0;
-                const canRequestSignoff = profile.role === 'tech' && ['Assigned', 'Dispatched', 'En Route', 'On Site'].includes(job.status) && beforeReady && afterReady;
+                const canRequestSignoff = profile.role === 'tech' && ['Assigned', 'Dispatched', 'En Route', 'On Site'].includes(job.status) && beforeReady && afterReady && Boolean(job.checkInAt);
                 const canClientSignoff = profile.role === 'client' && job.status === 'Ready for Signoff' && !job.clientSignedOff;
 
                 const isExpanded = expandedJobIds.includes(job.id);
@@ -2301,7 +2340,7 @@ function App() {
                       </div>
                       <div className="space-y-2 text-right">
                         <div className="text-slate-400 text-sm">Assigned tech</div>
-                        <div className="font-semibold">{job.assignedTechName || 'Unassigned'}</div>
+                        <TechNameWithPhoto job={job} techs={techs} />
                         {(job.assignedTechDistanceMiles ?? job.assignedTechDistanceKm) != null && (
                           <div className="text-slate-400 text-sm">{(job.assignedTechDistanceMiles ?? job.assignedTechDistanceKm).toFixed(1)} mi away</div>
                         )}
@@ -2697,6 +2736,16 @@ function App() {
                             </>
                           );
                         })()}
+                        {profile.role === 'admin' && !job.checkOutAt && (
+                          <label className="inline-flex items-center gap-2 rounded-2xl border border-slate-600 bg-slate-800 px-3 py-2 text-sm text-slate-200 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={Boolean(job.geofenceOverride)}
+                              onChange={(e) => updateDoc(doc(db, 'jobs', job.id), { geofenceOverride: e.target.checked, updatedAt: new Date() }).catch(() => setAppError('Unable to update site check-in override.'))}
+                            />
+                            Allow check-in from anywhere (remote job)
+                          </label>
+                        )}
                         {profile.role === 'tech' && canRequestSignoff && (
                           <button onClick={() => requestClientSignoff(job)} className="rounded-2xl bg-orange-500 px-4 py-2 text-sm font-semibold text-white hover:bg-orange-400 transition flex items-center gap-2">
                             <FileText size={16} /> Request sign-off
@@ -2776,7 +2825,7 @@ function App() {
                         </div>
                         <div className="space-y-2 text-right">
                           <div className="text-slate-400 text-sm">Assigned tech</div>
-                          <div className="font-semibold">{job.assignedTechName || 'Unassigned'}</div>
+                          <TechNameWithPhoto job={job} techs={techs} />
                           <div className="text-slate-400 text-sm mt-3">Completed</div>
                           <div className="text-slate-200 text-sm">{formatDate(job.completedAt || job.createdAt)}</div>
                         </div>
