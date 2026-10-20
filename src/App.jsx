@@ -40,6 +40,13 @@ const formatDate = (value) => {
   return new Date(value).toLocaleString();
 };
 
+// Returns all photo URLs for a job, including the legacy single-photo field.
+const getJobPhotos = (job, type) => {
+  const list = Array.isArray(job?.[`${type}Photos`]) ? job[`${type}Photos`] : [];
+  const legacy = job?.[`${type}PhotoUrl`];
+  return legacy && !list.includes(legacy) ? [legacy, ...list] : list;
+};
+
 const JOB_WINDOW_MS = 2 * 60 * 60 * 1000;
 
 const toMillis = (value) => {
@@ -1330,20 +1337,32 @@ function App() {
     });
   };
 
-  const handlePhotoUpload = async (event, jobId, type) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    // Reset the input so the same file can be re-selected after a replace
+  const handlePhotoUpload = async (event, job, type) => {
+    const files = Array.from(event.target.files || []);
+    if (!files.length) return;
+    // Reset the input so the same files can be re-selected
     event.target.value = '';
+    const jobId = job.id;
     try {
       setUploadingId(jobId);
-      const storageRef = ref(storage, `jobs/${jobId}/${type}-${file.name}`);
-      await uploadBytes(storageRef, file);
-      const url = await getDownloadURL(storageRef);
-      await updateDoc(doc(db, 'jobs', jobId), {
-        [`${type}PhotoUrl`]: url,
-        updatedAt: new Date(),
-      });
+      const results = await Promise.allSettled(files.map(async (file, i) => {
+        const safeName = file.name.replace(/[^\w.-]/g, '_');
+        const storageRef = ref(storage, `jobs/${jobId}/${type}-${Date.now()}-${i}-${safeName}`);
+        await uploadBytes(storageRef, file);
+        return getDownloadURL(storageRef);
+      }));
+      const urls = results.filter((r) => r.status === 'fulfilled').map((r) => r.value);
+      if (urls.length) {
+        // Re-read the latest job so concurrent uploads aren't overwritten
+        const snap = await getDoc(doc(db, 'jobs', jobId));
+        const current = snap.exists() ? snap.data() : job;
+        await updateDoc(doc(db, 'jobs', jobId), {
+          [`${type}Photos`]: [...getJobPhotos(current, type), ...urls],
+          [`${type}PhotoUrl`]: '',
+          updatedAt: new Date(),
+        });
+      }
+      if (urls.length < files.length) setAppError(`${files.length - urls.length} photo(s) failed to upload.`);
     } catch (error) {
       console.error('Photo upload failed', error);
       setAppError('Photo upload failed.');
@@ -1372,10 +1391,13 @@ function App() {
     }
   };
 
-  const deletePhoto = async (jobId, type) => {
-    if (!(await askConfirm(`Are you sure you want to delete the ${type} photo? This action cannot be undone.`))) return;
+  const deletePhoto = async (job, type, url) => {
+    if (!(await askConfirm(`Are you sure you want to delete this ${type} photo? This action cannot be undone.`))) return;
     try {
-      await updateDoc(doc(db, 'jobs', jobId), {
+      const snap = await getDoc(doc(db, 'jobs', job.id));
+      const current = snap.exists() ? snap.data() : job;
+      await updateDoc(doc(db, 'jobs', job.id), {
+        [`${type}Photos`]: getJobPhotos(current, type).filter((u) => u !== url),
         [`${type}PhotoUrl`]: '',
         updatedAt: new Date(),
       });
@@ -2149,8 +2171,8 @@ function App() {
             <div className="space-y-6">
               {filteredActiveJobs.map((job) => {
                 const total = calcInvoiceTotal(job.consumables || [], job.serviceFee);
-                const beforeReady = Boolean(job.beforePhotoUrl);
-                const afterReady = Boolean(job.afterPhotoUrl);
+                const beforeReady = getJobPhotos(job, 'before').length > 0;
+                const afterReady = getJobPhotos(job, 'after').length > 0;
                 const canRequestSignoff = profile.role === 'tech' && ['Assigned', 'Dispatched', 'En Route', 'On Site'].includes(job.status) && beforeReady && afterReady;
                 const canClientSignoff = profile.role === 'client' && job.status === 'Ready for Signoff' && !job.clientSignedOff;
 
@@ -2243,56 +2265,45 @@ function App() {
                           {uploadingId === job.id && <span className="text-teal-300 normal-case tracking-normal">Uploading photo...</span>}
                         </div>
                         <div className="grid gap-3">
-                          <div className="rounded-2xl bg-slate-900 p-3 border border-slate-700">
-                            <div className="text-slate-300 text-sm mb-2">Before photo</div>
-                            {job.beforePhotoUrl ? (
-                              <img src={job.beforePhotoUrl} alt="Before" className="w-full rounded-2xl object-cover" />
-                            ) : (
-                              <div className="rounded-2xl border border-dashed border-slate-700 p-8 text-center text-slate-500">No photo yet</div>
-                            )}
-                            {['tech', 'admin'].includes(profile.role) && (
-                              <div className="mt-3 flex flex-wrap gap-2">
-                                <label htmlFor={`before-cam-${job.id}`} className="cursor-pointer inline-flex items-center gap-2 rounded-2xl border border-slate-600 bg-slate-800 px-3 py-2 text-sm text-slate-200 hover:bg-slate-700 transition">
-                                  <Camera size={15} /> {job.beforePhotoUrl ? 'Retake' : 'Take photo'}
-                                </label>
-                                <input id={`before-cam-${job.id}`} type="file" className="hidden" accept="image/*" capture="environment" onChange={(e) => handlePhotoUpload(e, job.id, 'before')} />
-                                <label htmlFor={`before-file-${job.id}`} className="cursor-pointer inline-flex items-center gap-2 rounded-2xl border border-slate-600 bg-slate-800 px-3 py-2 text-sm text-slate-200 hover:bg-slate-700 transition">
-                                  <Plus size={15} /> {job.beforePhotoUrl ? 'Replace from gallery' : 'From gallery'}
-                                </label>
-                                <input id={`before-file-${job.id}`} type="file" className="hidden" accept="image/*" onChange={(e) => handlePhotoUpload(e, job.id, 'before')} />
-                                {job.beforePhotoUrl && (
-                                  <button type="button" onClick={() => deletePhoto(job.id, 'before')} className="inline-flex items-center gap-2 rounded-2xl border border-red-800 bg-red-950/40 px-3 py-2 text-sm text-red-300 hover:bg-red-900/50 transition">
-                                    <Trash2 size={15} /> Delete
-                                  </button>
+                          {['before', 'after'].map((type) => {
+                            const photos = getJobPhotos(job, type);
+                            const label = type === 'before' ? 'Before' : 'After';
+                            return (
+                              <div key={type} className="rounded-2xl bg-slate-900 p-3 border border-slate-700">
+                                <div className="text-slate-300 text-sm mb-2">{label} photos {photos.length > 0 && `(${photos.length})`}</div>
+                                {photos.length ? (
+                                  <div className="grid grid-cols-2 gap-2">
+                                    {photos.map((url) => (
+                                      <div key={url} className="relative">
+                                        <a href={url} target="_blank" rel="noreferrer">
+                                          <img src={url} alt={label} className="w-full aspect-square rounded-xl object-cover" />
+                                        </a>
+                                        {['tech', 'admin'].includes(profile.role) && (
+                                          <button type="button" aria-label={`Delete ${type} photo`} onClick={() => deletePhoto(job, type, url)} className="absolute top-1 right-1 rounded-full border border-red-800 bg-red-950/80 p-1.5 text-red-300 hover:bg-red-900 transition">
+                                            <Trash2 size={13} />
+                                          </button>
+                                        )}
+                                      </div>
+                                    ))}
+                                  </div>
+                                ) : (
+                                  <div className="rounded-2xl border border-dashed border-slate-700 p-8 text-center text-slate-500">No photos yet</div>
+                                )}
+                                {['tech', 'admin'].includes(profile.role) && (
+                                  <div className="mt-3 flex flex-wrap gap-2">
+                                    <label htmlFor={`${type}-cam-${job.id}`} className="cursor-pointer inline-flex items-center gap-2 rounded-2xl border border-slate-600 bg-slate-800 px-3 py-2 text-sm text-slate-200 hover:bg-slate-700 transition">
+                                      <Camera size={15} /> Take photo
+                                    </label>
+                                    <input id={`${type}-cam-${job.id}`} type="file" className="hidden" accept="image/*" capture="environment" onChange={(e) => handlePhotoUpload(e, job, type)} />
+                                    <label htmlFor={`${type}-file-${job.id}`} className="cursor-pointer inline-flex items-center gap-2 rounded-2xl border border-slate-600 bg-slate-800 px-3 py-2 text-sm text-slate-200 hover:bg-slate-700 transition">
+                                      <Plus size={15} /> Add from gallery
+                                    </label>
+                                    <input id={`${type}-file-${job.id}`} type="file" multiple className="hidden" accept="image/*" onChange={(e) => handlePhotoUpload(e, job, type)} />
+                                  </div>
                                 )}
                               </div>
-                            )}
-                          </div>
-                          <div className="rounded-2xl bg-slate-900 p-3 border border-slate-700">
-                            <div className="text-slate-300 text-sm mb-2">After photo</div>
-                            {job.afterPhotoUrl ? (
-                              <img src={job.afterPhotoUrl} alt="After" className="w-full rounded-2xl object-cover" />
-                            ) : (
-                              <div className="rounded-2xl border border-dashed border-slate-700 p-8 text-center text-slate-500">No photo yet</div>
-                            )}
-                            {['tech', 'admin'].includes(profile.role) && (
-                              <div className="mt-3 flex flex-wrap gap-2">
-                                <label htmlFor={`after-cam-${job.id}`} className="cursor-pointer inline-flex items-center gap-2 rounded-2xl border border-slate-600 bg-slate-800 px-3 py-2 text-sm text-slate-200 hover:bg-slate-700 transition">
-                                  <Camera size={15} /> {job.afterPhotoUrl ? 'Retake' : 'Take photo'}
-                                </label>
-                                <input id={`after-cam-${job.id}`} type="file" className="hidden" accept="image/*" capture="environment" onChange={(e) => handlePhotoUpload(e, job.id, 'after')} />
-                                <label htmlFor={`after-file-${job.id}`} className="cursor-pointer inline-flex items-center gap-2 rounded-2xl border border-slate-600 bg-slate-800 px-3 py-2 text-sm text-slate-200 hover:bg-slate-700 transition">
-                                  <Plus size={15} /> {job.afterPhotoUrl ? 'Replace from gallery' : 'From gallery'}
-                                </label>
-                                <input id={`after-file-${job.id}`} type="file" className="hidden" accept="image/*" onChange={(e) => handlePhotoUpload(e, job.id, 'after')} />
-                                {job.afterPhotoUrl && (
-                                  <button type="button" onClick={() => deletePhoto(job.id, 'after')} className="inline-flex items-center gap-2 rounded-2xl border border-red-800 bg-red-950/40 px-3 py-2 text-sm text-red-300 hover:bg-red-900/50 transition">
-                                    <Trash2 size={15} /> Delete
-                                  </button>
-                                )}
-                              </div>
-                            )}
-                          </div>
+                            );
+                          })}
                         </div>
                       </div>
 
@@ -2681,20 +2692,24 @@ function App() {
                           <div className="text-slate-200 text-sm">{formatDate(job.completedAt || job.createdAt)}</div>
                         </div>
                       </div>
-                      {(job.beforePhotoUrl || job.afterPhotoUrl) && (
+                      {(getJobPhotos(job, 'before').length > 0 || getJobPhotos(job, 'after').length > 0) && (
                         <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-4">
-                          {job.beforePhotoUrl && (
-                            <div className="rounded-2xl bg-slate-900 p-3 border border-slate-700">
-                              <div className="text-slate-300 text-sm mb-2">Before photo</div>
-                              <img src={job.beforePhotoUrl} alt="Before" className="w-full rounded-2xl object-cover" />
-                            </div>
-                          )}
-                          {job.afterPhotoUrl && (
-                            <div className="rounded-2xl bg-slate-900 p-3 border border-slate-700">
-                              <div className="text-slate-300 text-sm mb-2">After photo</div>
-                              <img src={job.afterPhotoUrl} alt="After" className="w-full rounded-2xl object-cover" />
-                            </div>
-                          )}
+                          {['before', 'after'].map((type) => {
+                            const photos = getJobPhotos(job, type);
+                            if (!photos.length) return null;
+                            return (
+                              <div key={type} className="rounded-2xl bg-slate-900 p-3 border border-slate-700">
+                                <div className="text-slate-300 text-sm mb-2">{type === 'before' ? 'Before' : 'After'} photos</div>
+                                <div className="grid grid-cols-2 gap-2">
+                                  {photos.map((url) => (
+                                    <a key={url} href={url} target="_blank" rel="noreferrer">
+                                      <img src={url} alt={type} className="w-full aspect-square rounded-xl object-cover" />
+                                    </a>
+                                  ))}
+                                </div>
+                              </div>
+                            );
+                          })}
                         </div>
                       )}
                       {canViewInvoice && (
