@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { db, storage, auth, messaging, functions, VAPID_KEY } from './firebase';
 import { collection, onSnapshot, addDoc, query, orderBy, deleteDoc, doc, updateDoc, getDocs, getDoc, setDoc, where, limit, getCountFromServer, writeBatch } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
-import { ref, uploadBytes, getDownloadURL, getBlob } from 'firebase/storage';
+import { ref, uploadBytes, getDownloadURL, getBlob, getMetadata } from 'firebase/storage';
 import { getToken } from 'firebase/messaging';
 import {
   createUserWithEmailAndPassword,
@@ -91,6 +91,10 @@ const TechNameWithPhoto = ({ job, techs }) => {
 };
 
 const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
+const PHOTO_MAX_DIMENSION = 1600;
+const PHOTO_JPEG_QUALITY = 0.8;
+const RECOMPRESS_MIN_BYTES = 1024 * 1024;
+const RECOMPRESS_MARKER = 'recompressed';
 const ATTACHMENT_ACCEPT = '.pdf,.doc,.docx,.xls,.xlsx,.xlsm,.csv,.ppt,.pptx,.txt,.zip,image/*';
 
 const formatFileSize = (bytes) => {
@@ -245,6 +249,26 @@ const fileToSquareDataUrl = async (file, size) => {
     const h = img.height * scale;
     canvas.getContext('2d').drawImage(img, (size - w) / 2, (size - h) / 2, w, h);
     return canvas.toDataURL('image/jpeg', 0.85);
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+};
+
+const compressPhotoForUpload = async (file) => {
+  if (!file.type.startsWith('image/')) return file;
+  const objectUrl = URL.createObjectURL(file);
+  try {
+    const img = await loadImageElement(objectUrl);
+    const scale = Math.min(1, PHOTO_MAX_DIMENSION / Math.max(img.width, img.height));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(img.width * scale);
+    canvas.height = Math.round(img.height * scale);
+    canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', PHOTO_JPEG_QUALITY));
+    if (!blob || blob.size >= file.size) return file;
+    return new File([blob], file.name.replace(/\.[^.]+$/, '') + '.jpg', { type: 'image/jpeg' });
+  } catch {
+    return file;
   } finally {
     URL.revokeObjectURL(objectUrl);
   }
@@ -621,6 +645,8 @@ function App() {
   const [billingMigrationBusy, setBillingMigrationBusy] = useState(false);
   const [billingMigrationMessage, setBillingMigrationMessage] = useState('');
   const [billingMigrationComplete, setBillingMigrationComplete] = useState(false);
+  const [recompressBusy, setRecompressBusy] = useState(false);
+  const [recompressMessage, setRecompressMessage] = useState('');
   const [sessionRestoreCount, setSessionRestoreCount] = useState(0);
   const [savedRoles, setSavedRoles] = useState({});
   const [requestFormOpen, setRequestFormOpen] = useState(false);
@@ -1521,6 +1547,76 @@ function App() {
     }
   };
 
+  const recompressStoredPhoto = async (jobId, url) => {
+    const photoRef = ref(storage, url);
+    const metadata = await getMetadata(photoRef);
+    if (metadata.customMetadata?.[RECOMPRESS_MARKER] === 'true' || metadata.size < RECOMPRESS_MIN_BYTES) return null;
+    const blob = await getBlob(photoRef);
+    const original = new File([blob], photoRef.name, { type: metadata.contentType || blob.type });
+    const compressed = await compressPhotoForUpload(original);
+    if (compressed === original) return null;
+    const backup = await uploadBytes(ref(storage, `jobs/${jobId}/original-${photoRef.name}`), original, { contentType: original.type });
+    if (backup.metadata.size !== metadata.size) throw new Error('Original backup size mismatch.');
+    await uploadBytes(photoRef, compressed, { customMetadata: { [RECOMPRESS_MARKER]: 'true' } });
+    return getDownloadURL(photoRef);
+  };
+
+  const recompressExistingPhotos = async () => {
+    if (profile?.role !== 'admin' || recompressBusy) return;
+    if (!(await askConfirm('Re-compress existing photos over 1 MB? Each original is kept as an "original-" copy in its job folder. Safe to run again.', 'Continue'))) return;
+    setRecompressBusy(true);
+    setRecompressMessage('');
+    let scanned = 0;
+    let replaced = 0;
+    let failed = 0;
+    try {
+      const jobSnapshot = await getDocs(collection(db, 'jobs'));
+      for (const jobDoc of jobSnapshot.docs) {
+        const jobId = jobDoc.id;
+        const job = jobDoc.data();
+        const replacements = new Map();
+        for (const type of ['before', 'after']) {
+          for (const url of getJobPhotos(job, type)) {
+            scanned += 1;
+            try {
+              const newUrl = await recompressStoredPhoto(jobId, url);
+              if (newUrl) {
+                replacements.set(url, newUrl);
+                replaced += 1;
+              }
+            } catch (error) {
+              failed += 1;
+              console.error('Photo re-compression failed', jobId, url, error);
+            }
+            setRecompressMessage(`Re-compressing... ${scanned} photo(s) checked, ${replaced} updated.`);
+          }
+        }
+        if (!replacements.size) continue;
+        try {
+          const current = (await getDoc(doc(db, 'jobs', jobId))).data() || {};
+          const mapUrl = (url) => replacements.get(url) ?? url;
+          const updates = {};
+          for (const type of ['before', 'after']) {
+            if (Array.isArray(current[`${type}Photos`])) updates[`${type}Photos`] = current[`${type}Photos`].map(mapUrl);
+            const legacy = current[`${type}PhotoUrl`];
+            if (legacy && replacements.has(legacy)) updates[`${type}PhotoUrl`] = replacements.get(legacy);
+          }
+          await updateDoc(doc(db, 'jobs', jobId), updates);
+        } catch (error) {
+          failed += replacements.size;
+          console.error('Updating job photo URLs failed', jobId, error);
+        }
+      }
+      setRecompressMessage(`Re-compressed ${replaced} photo(s) out of ${scanned} checked.`);
+      if (failed) setAppError(`${failed} photo(s) could not be re-compressed. Check the console for job IDs.`);
+    } catch (error) {
+      console.error('Photo re-compression failed', error);
+      setAppError('Unable to finish photo re-compression. You can safely run it again.');
+    } finally {
+      setRecompressBusy(false);
+    }
+  };
+
   const requestClientSignoff = async (job) => {
     if (!job.checkInAt) {
       setAppError('You must check in on site before requesting sign-off.');
@@ -1551,9 +1647,10 @@ function App() {
     try {
       setUploadingId(jobId);
       const results = await Promise.allSettled(files.map(async (file, i) => {
-        const safeName = file.name.replace(/[^\w.-]/g, '_');
+        const upload = await compressPhotoForUpload(file);
+        const safeName = upload.name.replace(/[^\w.-]/g, '_');
         const storageRef = ref(storage, `jobs/${jobId}/${type}-${Date.now()}-${i}-${safeName}`);
-        await uploadBytes(storageRef, file);
+        await uploadBytes(storageRef, upload);
         return getDownloadURL(storageRef);
       }));
       const urls = results.filter((r) => r.status === 'fulfilled').map((r) => r.value);
@@ -2396,6 +2493,17 @@ function App() {
                   {billingMigrationMessage && (
                     <span role="status" className="text-sm text-emerald-300">{billingMigrationMessage}</span>
                   )}
+                  <button
+                    type="button"
+                    onClick={recompressExistingPhotos}
+                    disabled={recompressBusy}
+                    className="rounded-2xl border border-slate-600 px-4 py-2 text-sm text-slate-200 hover:bg-slate-800 disabled:opacity-60 transition"
+                  >
+                    {recompressBusy ? 'Re-compressing...' : 'Re-compress photos'}
+                  </button>
+                  {recompressMessage && (
+                    <span role="status" className="text-sm text-emerald-300">{recompressMessage}</span>
+                  )}
                 </>
               )}
               <button
@@ -2554,7 +2662,7 @@ function App() {
                                     {photos.map((url) => (
                                       <div key={url} className="relative">
                                         <a href={url} target="_blank" rel="noreferrer">
-                                          <img src={url} alt={label} className="w-full aspect-square rounded-xl object-cover" />
+                                          <img src={url} alt={label} loading="lazy" decoding="async" className="w-full aspect-square rounded-xl object-cover" />
                                         </a>
                                         {['tech', 'admin'].includes(profile.role) && (
                                           <button type="button" aria-label={`Delete ${type} photo`} onClick={() => deletePhoto(job, type, url)} className="absolute top-1 right-1 rounded-full border border-red-800 bg-red-950/80 p-1.5 text-red-300 hover:bg-red-900 transition">
@@ -3037,7 +3145,7 @@ function App() {
                                   {photos.map((url) => (
                                     <div key={url} className="relative">
                                       <a href={url} target="_blank" rel="noreferrer">
-                                        <img src={url} alt={type} className="w-full aspect-square rounded-xl object-cover" />
+                                        <img src={url} alt={type} loading="lazy" decoding="async" className="w-full aspect-square rounded-xl object-cover" />
                                       </a>
                                       {canDownloadPhotos && (
                                         <button type="button" aria-label={`Download ${type} photo`} title="Download photo" onClick={() => downloadPhotos([url])} className="absolute bottom-1 left-1 rounded-full border border-slate-600 bg-slate-900/80 p-1.5 text-slate-200 hover:bg-slate-800 transition">
