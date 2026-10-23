@@ -1,0 +1,12 @@
+[
+  {
+    "origin": [
+      "https://smart-hands-live.web.app",
+      "https://smart-hands-live.firebaseapp.com",
+      "http://localhost:5173"
+    ],
+    "method": ["GET", "HEAD"],
+    "responseHeader": ["Content-Type", "Authorization"],
+    "maxAgeSeconds": 3600
+  }
+]

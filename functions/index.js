@@ -145,6 +145,108 @@ exports.notifyTechOnJobAssigned = onDocumentUpdated('jobs/{jobId}', async (event
   await sendDispatchNotification(event.params.jobId, after);
   return null;
 });
+
+const STAFF_ROLES = ['admin', 'adminAssistant', 'seniorConsultant'];
+
+async function getFcmTokens(query) {
+  const snapshot = await query.get();
+  return [...new Set(snapshot.docs.map((d) => d.data().fcmToken).filter(Boolean))];
+}
+
+async function sendJobPush(tokens, jobId, { title, body, tag }) {
+  if (!tokens.length) return;
+  const response = await admin.messaging().sendEachForMulticast({
+    tokens,
+    notification: { title, body },
+    data: { jobId: String(jobId) },
+    webpush: {
+      notification: { title, body, requireInteraction: true, tag },
+      fcmOptions: { link: '/' },
+    },
+  });
+  response.responses.forEach((r) => {
+    if (!r.success) console.error('FCM send failed:', r.error?.code, r.error?.message);
+  });
+}
+
+async function notifyAdmins(jobId, alert) {
+  const tokens = await getFcmTokens(admin.firestore().collection('users').where('role', '==', 'admin'));
+  await sendJobPush(tokens, jobId, alert);
+}
+
+function photoCount(job) {
+  return ['before', 'after'].reduce((total, type) => {
+    const list = Array.isArray(job[`${type}Photos`]) ? job[`${type}Photos`] : [];
+    const legacy = job[`${type}PhotoUrl`];
+    return total + list.length + (legacy && !list.includes(legacy) ? 1 : 0);
+  }, 0);
+}
+
+function fileCount(job) {
+  return Array.isArray(job.attachments) ? job.attachments.length : 0;
+}
+
+// Admins hear about requests from clients, assistants, and the website; admin-created jobs are excluded
+exports.notifyAdminsOnNewRequest = onDocumentCreated('jobs/{jobId}', async (event) => {
+  const job = event.data.data();
+  if (job.createdByRole === 'admin') return null;
+  await notifyAdmins(event.params.jobId, {
+    title: `New job request: ${job.task || 'Service'}`,
+    body: [job.client, job.location].filter(Boolean).join('  |  ') || 'Open the app for details',
+    tag: `request-${event.params.jobId}`,
+  });
+  return null;
+});
+
+// Admins hear when a technician checks in or out, requests sign-off, or adds photos or files
+exports.notifyAdminsOnTechActivity = onDocumentUpdated('jobs/{jobId}', async (event) => {
+  const before = event.data.before.data();
+  const after = event.data.after.data();
+  const jobId = event.params.jobId;
+  const who = after.assignedTechName || 'A technician';
+  const site = after.location || after.client || 'a job';
+  const alerts = [];
+
+  if (!before.checkInAt && after.checkInAt) {
+    alerts.push({ title: 'Technician checked in', body: `${who} checked in at ${site}`, tag: `checkin-${jobId}` });
+  }
+  if (!before.checkOutAt && after.checkOutAt) {
+    alerts.push({ title: 'Technician checked out', body: `${who} checked out from ${site}`, tag: `checkout-${jobId}` });
+  }
+  if (before.status !== 'Ready for Signoff' && after.status === 'Ready for Signoff') {
+    alerts.push({ title: 'Sign-off requested', body: `${who} requested sign-off for ${site}`, tag: `signoff-${jobId}` });
+  }
+  const newPhotos = photoCount(after) - photoCount(before);
+  if (newPhotos > 0) {
+    alerts.push({ title: 'Photos uploaded', body: `${who} added ${newPhotos} photo(s) at ${site}`, tag: `photos-${jobId}` });
+  }
+  const newFiles = fileCount(after) - fileCount(before);
+  if (newFiles > 0) {
+    alerts.push({ title: 'Files uploaded', body: `${who} added ${newFiles} file(s) at ${site}`, tag: `files-${jobId}` });
+  }
+
+  for (const alert of alerts) await notifyAdmins(jobId, alert);
+  return null;
+});
+
+// Technicians hear about status changes made by staff; their own changes are excluded
+exports.notifyTechOnStaffStatusChange = onDocumentUpdated('jobs/{jobId}', async (event) => {
+  const before = event.data.before.data();
+  const after = event.data.after.data();
+  if (!after.status || before.status === after.status) return null;
+  if (before.assignedTechEmail !== after.assignedTechEmail) return null;
+  if (!after.assignedTechEmail || !STAFF_ROLES.includes(after.statusUpdatedByRole)) return null;
+
+  const tokens = await getFcmTokens(
+    admin.firestore().collection('users').where('email', '==', after.assignedTechEmail).limit(1)
+  );
+  await sendJobPush(tokens, event.params.jobId, {
+    title: `Job update: ${after.status}`,
+    body: `${after.task || 'Your job'} at ${after.location || 'site'} is now ${after.status}`,
+    tag: `status-${event.params.jobId}`,
+  });
+  return null;
+});
 // A technician is busy only while en route or on site; future scheduled/assigned jobs do not make them busy.
 const ACTIVE_FIELD_STATUSES = ['En Route', 'On Site'];
 

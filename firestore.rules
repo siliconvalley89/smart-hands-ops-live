@@ -103,23 +103,25 @@ service cloud.firestore {
         (isAdminAssistant() &&
           request.resource.data.status in ['Pending', 'Assigned', 'Dispatched'] &&
           jobHasNoEmbeddedBilling(request.resource.data) &&
+          request.resource.data.get('createdByRole', '') != 'admin' &&
           request.resource.data.keys().hasOnly([
             'client', 'clientEmail', 'clientPhone', 'location', 'rawLocation', 'lat', 'lng',
             'task', 'details', 'serialNumber', 'scheduledFor', 'scheduledEnd', 'status',
             'assignedTechName', 'assignedTechEmail', 'assignedTechDistanceMiles',
             'assignedTechDistanceKm', 'billingMigrated', 'invoiceSent', 'beforePhotoUrl',
-            'afterPhotoUrl', 'clientSignedOff', 'createdAt'
+            'afterPhotoUrl', 'clientSignedOff', 'createdAt', 'createdByRole'
           ]) &&
           request.resource.data.get('invoiceSent', false) == false) ||
         (isClient() &&
           request.resource.data.clientEmail == request.auth.token.email &&
           jobHasNoEmbeddedBilling(request.resource.data) &&
+          request.resource.data.get('createdByRole', '') != 'admin' &&
           request.resource.data.keys().hasOnly([
             'client', 'clientEmail', 'clientPhone', 'location', 'rawLocation', 'lat', 'lng',
             'task', 'details', 'serialNumber', 'scheduledFor', 'scheduledEnd', 'status',
             'assignedTechName', 'assignedTechEmail', 'assignedTechDistanceMiles',
             'assignedTechDistanceKm', 'billingMigrated', 'invoiceSent', 'beforePhotoUrl',
-            'afterPhotoUrl', 'clientSignedOff', 'createdAt'
+            'afterPhotoUrl', 'clientSignedOff', 'createdAt', 'createdByRole'
           ]))
       );
 
@@ -130,13 +132,13 @@ service cloud.firestore {
           request.resource.data.status in ['Pending', 'Assigned', 'Dispatched', 'En Route', 'On Site'] &&
           request.resource.data.diff(resource.data).affectedKeys().hasOnly([
             'assignedTechName', 'assignedTechEmail', 'assignedTechDistanceMiles',
-            'assignedTechDistanceKm', 'status', 'updatedAt'
+            'assignedTechDistanceKm', 'status', 'statusUpdatedByRole', 'updatedAt'
           ])) ||
         (isTech() &&
           resource.data.assignedTechEmail == request.auth.token.email &&
           jobHasNoEmbeddedBilling(resource.data) &&
           request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-            'status', 'enRouteAt', 'updatedAt',
+            'status', 'statusUpdatedByRole', 'enRouteAt', 'updatedAt',
             'checkInAt', 'checkInLat', 'checkInLng',
             'checkOutAt', 'checkOutLat', 'checkOutLng',
             'breaks', 'beforePhotoUrl', 'afterPhotoUrl', 'beforePhotos', 'afterPhotos', 'attachments', 'signoffRequestedAt'
@@ -144,7 +146,7 @@ service cloud.firestore {
           request.resource.data.status in ['Assigned', 'Dispatched', 'En Route', 'On Site', 'Ready for Signoff']) ||
         // Clients can only set clientSignedOff on their own jobs; no other fields
         (isClient() && resource.data.clientEmail == request.auth.token.email &&
-          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['clientSignedOff', 'status', 'completedAt']))
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['clientSignedOff', 'status', 'statusUpdatedByRole', 'completedAt']))
       );
       allow delete: if isAdmin();
 
@@ -173,6 +175,11 @@ service cloud.firestore {
         get(/databases/$(database)/documents/jobs/$(jobId)).data.clientEmail == request.auth.token.email
       );
       allow create, update, delete: if isAdmin();
+    }
+
+    match /invoiceBilling/{docId} {
+      allow read: if isAdmin() || isClient();
+      allow write: if isAdmin();
     }
 
     match /systemMetadata/{documentId} {

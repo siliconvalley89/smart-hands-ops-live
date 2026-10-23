@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { db, storage, auth, messaging, functions, VAPID_KEY } from './firebase';
 import { collection, onSnapshot, addDoc, query, orderBy, deleteDoc, doc, updateDoc, getDocs, getDoc, setDoc, where, limit, getCountFromServer, writeBatch } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { ref, uploadBytes, getDownloadURL, getBlob } from 'firebase/storage';
 import { getToken } from 'firebase/messaging';
 import {
   createUserWithEmailAndPassword,
@@ -45,6 +45,32 @@ const getJobPhotos = (job, type) => {
   const list = Array.isArray(job?.[`${type}Photos`]) ? job[`${type}Photos`] : [];
   const legacy = job?.[`${type}PhotoUrl`];
   return legacy && !list.includes(legacy) ? [legacy, ...list] : list;
+};
+
+const MIN_CHECKOUT_BREAK_MS = 30 * 60 * 1000;
+const LONG_SHIFT_MS = 5 * 60 * 60 * 1000;
+
+const getCheckoutBlockReason = (job) => {
+  if (getJobPhotos(job, 'after').length === 0) return 'Upload at least one after photo before checking out.';
+  if (job.checkInAt && Date.now() - toMillis(job.checkInAt) >= LONG_SHIFT_MS) {
+    const hasLongBreak = (job.breaks || []).some((b) => b.startAt && b.endAt && toMillis(b.endAt) - toMillis(b.startAt) >= MIN_CHECKOUT_BREAK_MS);
+    if (!hasLongBreak) return 'After 5 hours on site, take a 30-minute break before checking out.';
+  }
+  return '';
+};
+
+const downloadPhotoFile = async (url) => {
+  const photoRef = ref(storage, url);
+  const blob = await getBlob(photoRef);
+  const fileName = photoRef.name || 'job-photo.jpg';
+  const objectUrl = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = objectUrl;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
 };
 
 const TechNameWithPhoto = ({ job, techs }) => {
@@ -335,54 +361,178 @@ const generateBadgePdf = async (profile, uid, onError) => {
   }
 };
 
+const NET_TERMS_DAYS = 30;
+
+const loadInvoiceBilling = async () => {
+  const snapshot = await getDoc(doc(db, 'invoiceBilling', 'invoice_details'));
+  if (!snapshot.exists()) throw new Error('Invoice billing details are not configured.');
+  return snapshot.data();
+};
+
 const generateInvoicePdf = async (job, onError) => {
   try {
     const { jsPDF } = await import('jspdf');
     const pdf = new jsPDF({ unit: 'pt', format: 'letter' });
     const logoDataUrl = await loadImageDataUrl(logoPath);
-    pdf.addImage(logoDataUrl, 'JPEG', 40, 40, 120, 40);
-    pdf.setFontSize(18);
-    pdf.text(BUSINESS_NAME, 40, 100);
-    pdf.setFontSize(12);
-    pdf.text(`Invoice ID: ${job.id}`, 40, 125);
-    pdf.text(`Date: ${formatDate(job.createdAt)}`, 40, 145);
-    pdf.text(`Client: ${job.client}`, 40, 165);
-    pdf.text(`Location: ${job.location}`, 40, 185);
-    pdf.text(`Assigned Tech: ${job.assignedTechName || 'N/A'}`, 40, 205);
-    pdf.text(`Service: ${job.task}`, 40, 225);
-    pdf.text(`Service fee: $${Number(job.serviceFee || 0).toFixed(2)}`, 40, 245);
-    pdf.setFontSize(11);
-    pdf.text(`Service fee description: ${job.serviceFeeDescription || 'N/A'}`, 40, 262);
-    let y = 282;
-    pdf.setFontSize(12);
-    pdf.text('Service details:', 40, y);
+    const billing = await loadInvoiceBilling();
+    const signedOffDate = job.adminSignedOffAt ? (job.adminSignedOffAt.toDate ? job.adminSignedOffAt.toDate() : new Date(job.adminSignedOffAt)) : null;
+    const dueDate = signedOffDate ? new Date(signedOffDate) : null;
+    if (dueDate) dueDate.setDate(dueDate.getDate() + NET_TERMS_DAYS);
+
+    const pageWidth = pdf.internal.pageSize.getWidth();
+    const pageHeight = pdf.internal.pageSize.getHeight();
+    const left = 48;
+    const right = pageWidth - 48;
+    const width = right - left;
+    const bottom = pageHeight - 90;
+    const navy = [15, 23, 42];
+    const muted = [100, 116, 139];
+    const accent = [13, 148, 136];
+    const rule = [226, 232, 240];
+    const tableHeaderFill = [241, 245, 249];
+    const money = (value) => `$${Number(value || 0).toFixed(2)}`;
+    const dateText = (value) => (value ? value.toLocaleDateString() : 'Pending admin sign-off');
+    const setText = (size, style, color) => {
+      pdf.setFontSize(size);
+      pdf.setFont('helvetica', style);
+      pdf.setTextColor(...color);
+    };
+
+    pdf.addImage(logoDataUrl, 'JPEG', left, 40, 120, 40);
+    setText(16, 'bold', navy);
+    pdf.text(BUSINESS_NAME, left, 100);
+    setText(26, 'bold', accent);
+    pdf.text('INVOICE', right, 66, { align: 'right' });
+    let metaY = 88;
+    [
+      ['Invoice #', job.id],
+      ['Invoice date', dateText(signedOffDate)],
+      ['Terms', `Net ${NET_TERMS_DAYS}`],
+      ['Due date', dateText(dueDate)],
+    ].forEach(([label, value]) => {
+      setText(9, 'normal', muted);
+      pdf.text(label, right - 200, metaY);
+      setText(10, 'bold', navy);
+      pdf.text(String(value), right, metaY, { align: 'right' });
+      metaY += 15;
+    });
+    pdf.setDrawColor(...rule);
+    pdf.line(left, 162, right, 162);
+
+    let y = 184;
+    const serviceColumn = 330;
+    setText(8, 'bold', muted);
+    pdf.text('BILL TO', left, y);
+    pdf.text('SERVICE', serviceColumn, y);
+    setText(11, 'normal', navy);
+    const billLines = [...pdf.splitTextToSize(job.client || 'N/A', 260), ...pdf.splitTextToSize(job.location || 'N/A', 260)];
+    const serviceLines = [
+      ...pdf.splitTextToSize(job.task || 'N/A', right - serviceColumn),
+      ...pdf.splitTextToSize(`Assigned tech: ${job.assignedTechName || 'N/A'}`, right - serviceColumn),
+    ];
+    billLines.forEach((line, index) => pdf.text(line, left, y + 16 + index * 14));
+    serviceLines.forEach((line, index) => pdf.text(line, serviceColumn, y + 16 + index * 14));
+    y += 16 + Math.max(billLines.length, serviceLines.length) * 14 + 12;
+
+    setText(8, 'bold', muted);
+    pdf.text('SERVICE DETAILS', left, y);
+    setText(10, 'normal', navy);
+    const detailLines = pdf.splitTextToSize(job.details || 'N/A', width);
+    detailLines.forEach((line, index) => pdf.text(line, left, y + 16 + index * 13));
+    y += 16 + detailLines.length * 13 + 14;
+
+    const colDesc = left + 8;
+    const descWidth = 330;
+    const qtyRight = 420;
+    const unitRight = 490;
+    const amountRight = right - 8;
+    const drawTableHeader = (top) => {
+      pdf.setFillColor(...tableHeaderFill);
+      pdf.rect(left, top, width, 22, 'F');
+      setText(8, 'bold', muted);
+      pdf.text('DESCRIPTION', colDesc, top + 14);
+      pdf.text('QTY', qtyRight, top + 14, { align: 'right' });
+      pdf.text('UNIT PRICE', unitRight, top + 14, { align: 'right' });
+      pdf.text('AMOUNT', amountRight, top + 14, { align: 'right' });
+      return top + 22;
+    };
+    const lineItems = [
+      {
+        description: `Service fee${job.serviceFeeDescription ? `: ${job.serviceFeeDescription}` : ''}`,
+        qty: 1,
+        unitPrice: Number(job.serviceFee || 0),
+      },
+      ...(job.consumables || []).map((item) => ({
+        description: item.description || '',
+        qty: Number(item.qty || 0),
+        unitPrice: Number(item.unitPrice || 0),
+      })),
+    ];
+    y = drawTableHeader(y);
+    lineItems.forEach((item) => {
+      setText(10, 'normal', navy);
+      const lines = pdf.splitTextToSize(item.description, descWidth);
+      const rowHeight = lines.length * 13 + 10;
+      if (y + rowHeight > bottom) {
+        pdf.addPage();
+        y = drawTableHeader(60);
+        setText(10, 'normal', navy);
+      }
+      lines.forEach((line, index) => pdf.text(line, colDesc, y + 15 + index * 13));
+      pdf.text(String(item.qty), qtyRight, y + 15, { align: 'right' });
+      pdf.text(money(item.unitPrice), unitRight, y + 15, { align: 'right' });
+      pdf.text(money(item.qty * item.unitPrice), amountRight, y + 15, { align: 'right' });
+      y += rowHeight;
+      pdf.setDrawColor(...rule);
+      pdf.line(left, y, right, y);
+    });
+
+    const total = calcInvoiceTotal(job.consumables || [], job.serviceFee);
     y += 18;
-    pdf.setFontSize(11);
-    pdf.text(job.details || 'N/A', 40, y);
-    y += 28;
-    pdf.setFontSize(12);
-    pdf.text('Consumables:', 40, y);
+    setText(10, 'bold', muted);
+    pdf.text('Total due', 456, y, { align: 'right' });
+    setText(14, 'bold', accent);
+    pdf.text(money(total), amountRight, y, { align: 'right' });
+    y += 30;
 
-    let yConsumables = y + 20;
-    const consumables = job.consumables || [];
-    if (consumables.length === 0) {
-      pdf.text('None', 40, yConsumables);
-      yConsumables += 20;
-    } else {
-      pdf.setFontSize(11);
-      consumables.forEach((item) => {
-        const amount = Number(item.qty || 0) * Number(item.unitPrice || 0);
-        pdf.text(`${item.description} - ${item.qty} x $${Number(item.unitPrice || 0).toFixed(2)} = $${amount.toFixed(2)}`, 40, yConsumables);
-        yConsumables += 18;
-      });
-      yConsumables += 10;
+    setText(10, 'normal', navy);
+    const paymentColumns = [
+      [
+        ['Beneficiary', billing.beneficiary_name],
+        ['Bank', billing.bank_name],
+        ['Bank address', billing.bank_address],
+      ],
+      [
+        ['Routing number', billing.routing_number],
+        ['Account number', billing.account_number],
+        ['Currency', billing.currency],
+        ['Payment terms', billing.payment_terms],
+      ],
+    ].map((items) => items.map(([label, value]) => ({ label, lines: pdf.splitTextToSize(String(value || '-'), 220) })));
+    const columnHeight = (items) => items.reduce((height, item) => height + 12 + item.lines.length * 12 + 6, 0);
+    const boxHeight = 34 + Math.max(...paymentColumns.map(columnHeight)) + 8;
+    if (y + boxHeight > bottom) {
+      pdf.addPage();
+      y = 60;
     }
+    pdf.setFillColor(248, 250, 252);
+    pdf.setDrawColor(...rule);
+    pdf.roundedRect(left, y, width, boxHeight, 6, 6, 'FD');
+    setText(9, 'bold', accent);
+    pdf.text('PAYMENT DETAILS', left + 14, y + 18);
+    [left + 14, left + 14 + width / 2].forEach((x, columnIndex) => {
+      let itemY = y + 36;
+      paymentColumns[columnIndex].forEach(({ label, lines }) => {
+        setText(8, 'bold', muted);
+        pdf.text(label.toUpperCase(), x, itemY);
+        setText(10, 'normal', navy);
+        lines.forEach((line, index) => pdf.text(line, x, itemY + 12 + index * 12));
+        itemY += 12 + lines.length * 12 + 6;
+      });
+    });
 
-    pdf.setFontSize(12);
-    pdf.text(`Total: $${calcInvoiceTotal(consumables, job.serviceFee).toFixed(2)}`, 40, yConsumables + 10);
-    const footerY = pdf.internal.pageSize.height - 40;
-    pdf.setFontSize(10);
-    pdf.text('Thank you for choosing Silicon Valley Smart Hands LLC.', 40, footerY);
+    setText(9, 'normal', muted);
+    pdf.text('Thank you for choosing Silicon Valley Smart Hands LLC.', pageWidth / 2, pageHeight - 40, { align: 'center' });
     pdf.save(`SV-Smart-Dispatch-Invoice-${job.id}.pdf`);
   } catch (error) {
     console.error('Invoice generation failed', error);
@@ -914,6 +1064,7 @@ function App() {
         scheduledFor: scheduledDate,
         scheduledEnd: scheduledEndDate,
         status: nearest ? 'Assigned' : 'Pending',
+        createdByRole: profile.role,
         assignedTechName: nearest?.name || '',
         assignedTechEmail: nearest?.email || '',
         assignedTechDistanceMiles: nearest?.distanceMiles || null,
@@ -1084,6 +1235,13 @@ function App() {
 
   const recordTechGeoEvent = async (job, eventType) => {
     setAppError('');
+    if (eventType === 'checkOut') {
+      const blockReason = getCheckoutBlockReason(job);
+      if (blockReason) {
+        setAppError(blockReason);
+        return;
+      }
+    }
     try {
       setGeoEventBusyJobId(job.id);
       const coords = await getCurrentCoordinates();
@@ -1107,6 +1265,7 @@ function App() {
         payload.checkInLat = coords.lat;
         payload.checkInLng = coords.lng;
         payload.status = 'On Site';
+        payload.statusUpdatedByRole = profile.role;
       }
 
       if (eventType === 'checkOut') {
@@ -1369,6 +1528,7 @@ function App() {
     }
     await updateDoc(doc(db, 'jobs', job.id), {
       status: 'Ready for Signoff',
+      statusUpdatedByRole: profile.role,
       signoffRequestedAt: new Date(),
     });
   };
@@ -1377,6 +1537,7 @@ function App() {
     await updateDoc(doc(db, 'jobs', job.id), {
       clientSignedOff: true,
       status: 'Completed',
+      statusUpdatedByRole: profile.role,
       completedAt: new Date(),
     });
   };
@@ -1488,6 +1649,16 @@ function App() {
     }
   };
 
+  const downloadPhotos = async (urls) => {
+    setAppError('');
+    try {
+      for (const url of urls) await downloadPhotoFile(url);
+    } catch (error) {
+      console.error('Photo download failed', error);
+      setAppError('Unable to download photo.');
+    }
+  };
+
   const deletePhoto = async (job, type, url) => {
     if (!(await askConfirm(`Are you sure you want to delete this ${type} photo? This action cannot be undone.`))) return;
     try {
@@ -1532,6 +1703,7 @@ function App() {
       const updates = { adminSignedOff: true, adminSignedOffAt: new Date() };
       if (job.status !== 'Completed') {
         updates.status = 'Completed';
+        updates.statusUpdatedByRole = profile.role;
         updates.completedAt = new Date();
       }
       await updateDoc(doc(db, 'jobs', job.id), updates);
@@ -1573,6 +1745,7 @@ function App() {
         assignedTechDistanceMiles: distanceMiles,
         assignedTechDistanceKm: distanceMiles,
         status: 'Assigned',
+        statusUpdatedByRole: profile.role,
       });
       // Cloud Function (manageTechStatusOnJobUpdated) marks techs busy only while en route / on site
 
@@ -1612,6 +1785,7 @@ function App() {
     : [];
 
   const canViewInvoice = profile?.role === 'admin' || profile?.role === 'client';
+  const canDownloadPhotos = canViewInvoice;
   const activeJobsCount = currentJobs.filter((job) => job.status !== 'Completed' && !job.assignedTechEmail && !isJobDispatched(job)).length;
   const assignedJobsCount = currentJobs.filter(isJobAssigned).length;
   const dispatchedJobsCount = currentJobs.filter(isJobDispatched).length;
@@ -2367,7 +2541,14 @@ function App() {
                             const label = type === 'before' ? 'Before' : 'After';
                             return (
                               <div key={type} className="rounded-2xl bg-slate-900 p-3 border border-slate-700">
-                                <div className="text-slate-300 text-sm mb-2">{label} photos {photos.length > 0 && `(${photos.length})`}</div>
+                                <div className="mb-2 flex items-center justify-between gap-2">
+                                  <div className="text-slate-300 text-sm">{label} photos {photos.length > 0 && `(${photos.length})`}</div>
+                                  {canDownloadPhotos && photos.length > 0 && (
+                                    <button type="button" onClick={() => downloadPhotos(photos)} className="inline-flex items-center gap-1 rounded-xl border border-slate-600 bg-slate-800 px-2 py-1 text-xs text-slate-200 hover:bg-slate-700 transition">
+                                      <Download size={12} /> Download all
+                                    </button>
+                                  )}
+                                </div>
                                 {photos.length ? (
                                   <div className="grid grid-cols-2 gap-2">
                                     {photos.map((url) => (
@@ -2378,6 +2559,11 @@ function App() {
                                         {['tech', 'admin'].includes(profile.role) && (
                                           <button type="button" aria-label={`Delete ${type} photo`} onClick={() => deletePhoto(job, type, url)} className="absolute top-1 right-1 rounded-full border border-red-800 bg-red-950/80 p-1.5 text-red-300 hover:bg-red-900 transition">
                                             <Trash2 size={13} />
+                                          </button>
+                                        )}
+                                        {canDownloadPhotos && (
+                                          <button type="button" aria-label={`Download ${type} photo`} title="Download photo" onClick={() => downloadPhotos([url])} className="absolute bottom-1 left-1 rounded-full border border-slate-600 bg-slate-900/80 p-1.5 text-slate-200 hover:bg-slate-800 transition">
+                                            <Download size={13} />
                                           </button>
                                         )}
                                       </div>
@@ -2692,7 +2878,7 @@ function App() {
                       <div className="flex flex-wrap gap-3">
                         {profile.role === 'tech' && !job.checkInAt && job.status !== 'En Route' && (
                           <button
-                            onClick={() => updateDoc(doc(db, 'jobs', job.id), { status: 'En Route', enRouteAt: new Date(), updatedAt: new Date() })}
+                            onClick={() => updateDoc(doc(db, 'jobs', job.id), { status: 'En Route', statusUpdatedByRole: profile.role, enRouteAt: new Date(), updatedAt: new Date() })}
                             className="rounded-2xl bg-amber-600 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-500 transition flex items-center gap-2"
                           >
                             <MapPin size={16} /> Start en route
@@ -2709,6 +2895,7 @@ function App() {
                         )}
                         {profile.role === 'tech' && job.checkInAt && !job.checkOutAt && (() => {
                           const hasActiveBreak = (job.breaks || []).some(b => b.startAt && !b.endAt);
+                          const checkoutBlockReason = getCheckoutBlockReason(job);
                           return hasActiveBreak ? (
                             <button
                               onClick={() => recordTechGeoEvent(job, 'breakEnd')}
@@ -2728,11 +2915,12 @@ function App() {
                               </button>
                               <button
                                 onClick={() => recordTechGeoEvent(job, 'checkOut')}
-                                disabled={geoEventBusyJobId === job.id}
-                                className="rounded-2xl bg-fuchsia-600 px-4 py-2 text-sm font-semibold text-white hover:bg-fuchsia-500 transition flex items-center gap-2 disabled:opacity-60"
+                                disabled={geoEventBusyJobId === job.id || Boolean(checkoutBlockReason)}
+                                className="rounded-2xl bg-fuchsia-600 px-4 py-2 text-sm font-semibold text-white hover:bg-fuchsia-500 transition flex items-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
                               >
                                 <MapPin size={16} /> {geoEventBusyJobId === job.id ? 'Checking out...' : 'Check out from site'}
                               </button>
+                              {checkoutBlockReason && <span className="self-center text-xs text-amber-300">{checkoutBlockReason}</span>}
                             </>
                           );
                         })()}
@@ -2837,12 +3025,26 @@ function App() {
                             if (!photos.length) return null;
                             return (
                               <div key={type} className="rounded-2xl bg-slate-900 p-3 border border-slate-700">
-                                <div className="text-slate-300 text-sm mb-2">{type === 'before' ? 'Before' : 'After'} photos</div>
+                                <div className="mb-2 flex items-center justify-between gap-2">
+                                  <div className="text-slate-300 text-sm">{type === 'before' ? 'Before' : 'After'} photos</div>
+                                  {canDownloadPhotos && (
+                                    <button type="button" onClick={() => downloadPhotos(photos)} className="inline-flex items-center gap-1 rounded-xl border border-slate-600 bg-slate-800 px-2 py-1 text-xs text-slate-200 hover:bg-slate-700 transition">
+                                      <Download size={12} /> Download all
+                                    </button>
+                                  )}
+                                </div>
                                 <div className="grid grid-cols-2 gap-2">
                                   {photos.map((url) => (
-                                    <a key={url} href={url} target="_blank" rel="noreferrer">
-                                      <img src={url} alt={type} className="w-full aspect-square rounded-xl object-cover" />
-                                    </a>
+                                    <div key={url} className="relative">
+                                      <a href={url} target="_blank" rel="noreferrer">
+                                        <img src={url} alt={type} className="w-full aspect-square rounded-xl object-cover" />
+                                      </a>
+                                      {canDownloadPhotos && (
+                                        <button type="button" aria-label={`Download ${type} photo`} title="Download photo" onClick={() => downloadPhotos([url])} className="absolute bottom-1 left-1 rounded-full border border-slate-600 bg-slate-900/80 p-1.5 text-slate-200 hover:bg-slate-800 transition">
+                                          <Download size={13} />
+                                        </button>
+                                      )}
+                                    </div>
                                   ))}
                                 </div>
                               </div>
