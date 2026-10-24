@@ -233,15 +233,16 @@ export default function Receivables({ recordedBy, setAppError }) {
                   {job.clientEmail && <span className="text-slate-400">{job.clientEmail}</span>}
                 </div>
 
-                <div className="mt-3">
-                  <button type="button" onClick={() => toggleRow(row)} className="rounded-2xl bg-teal-600 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-500 transition">
-                    {isOpen ? 'Close' : receivable.balance > 0 ? 'Record payment' : 'Payments'}
-                  </button>
-                </div>
+                {receivable.balance > 0 && (
+                  <div className="mt-3">
+                    <button type="button" onClick={() => toggleRow(row)} className="rounded-2xl bg-teal-600 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-500 transition">
+                      {isOpen ? 'Close' : 'Record payment'}
+                    </button>
+                  </div>
+                )}
 
-                {isOpen && (
-                  <div className="mt-4 grid gap-4 border-t border-slate-700 pt-4">
-                    {receivable.balance > 0 && (
+                <div className="mt-4 grid gap-4 border-t border-slate-700 pt-4">
+                    {isOpen && receivable.balance > 0 && (
                       <div className="grid gap-3 sm:grid-cols-2">
                         <input type="number" min="0" step="0.01" placeholder="Amount" value={form.amount} onChange={(e) => setForm((prev) => ({ ...prev, amount: e.target.value }))} className="rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3 text-slate-100" />
                         <select value={form.method} onChange={(e) => setForm((prev) => ({ ...prev, method: e.target.value }))} className="rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3 text-slate-100">
@@ -278,7 +279,7 @@ export default function Receivables({ recordedBy, setAppError }) {
                                 <button type="button" onClick={() => setVoidTarget(null)} className="rounded-2xl border border-slate-600 px-4 py-2 text-sm text-slate-200 hover:bg-slate-800 transition">Cancel</button>
                               </div>
                             ) : (
-                              <button type="button" onClick={() => { setVoidTarget({ paymentId: payment.id, reason: '' }); setFormError(''); }} className="mt-2 text-rose-300 text-xs hover:text-rose-200">Void payment</button>
+                              <button type="button" onClick={() => { setVoidTarget({ paymentId: payment.id, reason: '' }); setFormError(''); }} className="mt-2 rounded-xl border border-rose-500/60 px-3 py-1 text-xs font-semibold text-rose-300 hover:bg-rose-500/10 transition">Void payment</button>
                             )}
                           </div>
                         );
@@ -286,8 +287,7 @@ export default function Receivables({ recordedBy, setAppError }) {
                     </div>
 
                     {formError && <div className="text-rose-300 text-sm">{formError}</div>}
-                  </div>
-                )}
+                </div>
               </div>
             );
           })}

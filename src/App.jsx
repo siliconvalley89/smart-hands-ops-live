@@ -1341,6 +1341,7 @@ function App() {
     : [];
 
   const canViewInvoice = profile?.role === 'admin' || profile?.role === 'client';
+  const canEditConsumables = profile?.role === 'admin' || isFieldRole(profile?.role);
   const canDownloadPhotos = canViewInvoice;
   const activeJobsCount = currentJobs.filter((job) => job.status !== 'Completed' && !job.assignedTechEmail && !isJobDispatched(job)).length;
   const assignedJobsCount = currentJobs.filter(isJobAssigned).length;
@@ -2245,7 +2246,7 @@ function App() {
                                     <div className="flex flex-col gap-3">
                                       <div className="flex items-start justify-between gap-3">
                                         <div>
-                                          {job.invoiceSent || !['tech', 'admin'].includes(profile.role) ? (
+                                          {job.invoiceSent || !canEditConsumables ? (
                                             <p className="text-slate-100">{item.description}</p>
                                           ) : (
                                             <input
@@ -2256,16 +2257,14 @@ function App() {
                                           )}
                                           <p className="text-slate-500 text-sm">Qty: {itemQty}</p>
                                         </div>
-                                        {canViewInvoice ? (
+                                        {canViewInvoice && (
                                           <div className="text-right text-slate-200">
                                             <div>${Number(itemUnitPrice).toFixed(2)} each</div>
                                             <div className="text-slate-400 text-sm">${(Number(itemQty) * Number(itemUnitPrice)).toFixed(2)}</div>
                                           </div>
-                                        ) : (
-                                          <div className="text-slate-400 text-sm">Amount hidden</div>
                                         )}
                                       </div>
-                                      {!job.invoiceSent && ['tech', 'admin'].includes(profile.role) && (
+                                      {!job.invoiceSent && canEditConsumables && (
                                         <div className={`grid gap-2 ${profile.role === 'admin' ? 'sm:grid-cols-[1fr_auto_auto]' : 'sm:grid-cols-[1fr_auto]'}`}>
                                           <input
                                             type="number"
@@ -2292,7 +2291,7 @@ function App() {
                                           </button>
                                         </div>
                                       )}
-                                      {!job.invoiceSent && ['tech', 'admin'].includes(profile.role) && (
+                                      {!job.invoiceSent && canEditConsumables && (
                                         <button
                                           onClick={() => deleteConsumable(job, item.id)}
                                           className="rounded-2xl bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-500 transition"
@@ -2307,7 +2306,7 @@ function App() {
                             </div>
                           )}
                         </div>
-                        {['tech', 'admin'].includes(profile.role) && (
+                        {canEditConsumables && (
                           <div className="mt-4 space-y-3">
                             <input
                               value={newConsumable.description}
