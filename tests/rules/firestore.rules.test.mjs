@@ -178,6 +178,19 @@ describe('consumables', () => {
     await assertFails(setDoc(doc(as.tech(), 'jobs/job-open/consumables/c-bad2'), { description: 'Cable', qty: 1, cost: 5 }));
   });
 
+  it('tech and admin can edit an existing consumable', async () => {
+    await assertSucceeds(updateDoc(doc(as.tech(), 'jobs/job-open/consumables/c1'), { description: 'Cable 2', qty: 2, updatedAt: new Date() }));
+    await assertSucceeds(updateDoc(doc(as.admin(), 'jobs/job-open/consumables/c1'), { description: 'Cable 3', qty: 3, updatedAt: new Date() }));
+  });
+
+  it('tech and admin can edit a consumable that has createdAt', async () => {
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      await setDoc(doc(context.firestore(), 'jobs/job-open/consumables/c3'), { description: 'Clip', qty: 1, createdAt: new Date() });
+    });
+    await assertSucceeds(updateDoc(doc(as.tech(), 'jobs/job-open/consumables/c3'), { description: 'Clip', qty: 4, updatedAt: new Date() }));
+    await assertSucceeds(updateDoc(doc(as.admin(), 'jobs/job-open/consumables/c3'), { description: 'Clip', qty: 5, updatedAt: new Date() }));
+  });
+
   it('nobody edits consumables once the job is invoiced, admin included', async () => {
     await assertFails(setDoc(doc(as.tech(), 'jobs/job-invoiced/consumables/c-new'), { description: 'Cable', qty: 1 }));
     await assertFails(setDoc(doc(as.admin(), 'jobs/job-invoiced/consumables/c-new'), { description: 'Cable', qty: 1 }));
