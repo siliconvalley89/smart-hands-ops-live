@@ -50,6 +50,8 @@ const SEED = [
   ['jobs/job-open/photos/ph-seed', { type: 'before', url: 'https://x/seed.jpg', path: 'jobs/job-open/seed.jpg', uploadedAt: new Date(), uploadedBy: TECH }],
   ['jobs/job-done/photos/ph-done', { type: 'after', url: 'https://x/done.jpg', path: 'jobs/job-done/done.jpg', uploadedAt: new Date(), uploadedBy: TECH }],
   ['jobs/job-open/files/fi-seed', { name: 'manual.pdf', url: 'https://x/manual.pdf', size: 1000, type: 'application/pdf', path: 'jobs/job-open/manual.pdf', uploadedAt: new Date(), uploadedBy: TECH }],
+  ['parts/part-cable', { name: 'Cable', sku: 'CBL-1', onHand: 10, reorderPoint: 2 }],
+  ['jobs/job-open/consumables/c-part', { description: 'Cable', qty: 1, partId: 'part-cable' }],
   ['jobs/job-open/payments/p1', {
     amount: 250, method: 'check', reference: '#101', receivedAt: new Date(), recordedAt: new Date(),
     recordedBy: ADMIN, voided: false,
@@ -294,6 +296,46 @@ describe('consumables', () => {
   it('collection group read is admin only', async () => {
     await assertSucceeds(getDocs(collectionGroup(as.admin(), 'consumables')));
     await assertFails(getDocs(collectionGroup(as.assistant(), 'consumables')));
+  });
+});
+
+describe('parts and stock', () => {
+  const newPart = (overrides = {}) => ({ name: 'Patch cord', sku: 'PC-6', onHand: 5, reorderPoint: 1, createdAt: new Date(), ...overrides });
+
+  it('admin creates a valid part and rejects a negative count', async () => {
+    await assertSucceeds(setDoc(doc(as.admin(), 'parts/part-new'), newPart()));
+    await assertFails(setDoc(doc(as.admin(), 'parts/part-bad'), newPart({ onHand: -1 })));
+    await assertFails(setDoc(doc(as.admin(), 'parts/part-bad2'), newPart({ cost: 3 })));
+  });
+
+  it('assistant and verified tech read parts; clients and unverified techs do not', async () => {
+    await assertSucceeds(getDoc(doc(as.assistant(), 'parts/part-cable')));
+    await assertSucceeds(getDoc(doc(as.tech(), 'parts/part-cable')));
+    await assertFails(getDoc(doc(as.client(), 'parts/part-cable')));
+    await assertFails(getDoc(doc(as.unverifiedTech(), 'parts/part-cable')));
+  });
+
+  it('only admin changes parts, including the on-hand count', async () => {
+    await assertFails(setDoc(doc(as.tech(), 'parts/part-new'), newPart()));
+    await assertFails(updateDoc(doc(as.tech(), 'parts/part-cable'), { onHand: 0 }));
+    await assertSucceeds(updateDoc(doc(as.admin(), 'parts/part-cable'), { onHand: 8, updatedAt: new Date() }));
+  });
+
+  it('a consumable may reference an existing part', async () => {
+    await assertSucceeds(setDoc(doc(as.tech(), 'jobs/job-open/consumables/c-new-part'), { description: 'Cable', qty: 2, partId: 'part-cable' }));
+    await assertFails(setDoc(doc(as.tech(), 'jobs/job-open/consumables/c-ghost'), { description: 'Cable', qty: 2, partId: 'part-ghost' }));
+  });
+
+  it('a part-linked consumable can still be edited', async () => {
+    await assertSucceeds(updateDoc(doc(as.tech(), 'jobs/job-open/consumables/c-part'), { description: 'Cable', qty: 2, updatedAt: new Date() }));
+  });
+
+  it('stock events are never readable or writable from the client', async () => {
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      await setDoc(doc(context.firestore(), 'stockEvents/evt-1'), { createdAt: new Date() });
+    });
+    await assertFails(getDoc(doc(as.admin(), 'stockEvents/evt-1')));
+    await assertFails(setDoc(doc(as.admin(), 'stockEvents/evt-2'), { createdAt: new Date() }));
   });
 });
 

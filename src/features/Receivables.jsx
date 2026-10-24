@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { collection, collectionGroup, onSnapshot, or, query, where } from 'firebase/firestore';
 import { db } from '../firebase';
+import { downloadCsv } from '../lib/csv';
 import { AGING_BUCKETS, PAYMENT_METHODS, getAgingBucket, getReceivableStatus, recordPayment, voidPayment } from '../lib/payments';
 
 const money = (value) => `$${Number(value || 0).toFixed(2)}`;
@@ -11,7 +12,6 @@ const todayInput = () => {
   const now = new Date();
   return new Date(now.getTime() - now.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
 };
-const csvCell = (value) => `"${String(value ?? '').replace(/"/g, '""')}"`;
 
 const EMPTY_FORM = { amount: '', method: 'check', reference: '', receivedDate: '' };
 const STATUS_STYLES = {
@@ -162,13 +162,7 @@ export default function Receivables({ recordedBy, setAppError }) {
       receivable.daysOverdue,
       receivable.status,
     ]);
-    const csv = [header, ...lines].map((line) => line.map(csvCell).join(',')).join('\n');
-    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `receivables-${todayInput()}.csv`;
-    link.click();
-    URL.revokeObjectURL(url);
+    downloadCsv(`receivables-${todayInput()}.csv`, [header, ...lines]);
   };
 
   return (

@@ -186,13 +186,16 @@ service cloud.firestore {
       match /consumables/{itemId} {
         allow read: if canReadJobConsumables(jobId);
         allow create: if canManageJobConsumables(jobId) &&
-          request.resource.data.keys().hasOnly(['description', 'qty', 'createdAt']) &&
+          request.resource.data.keys().hasOnly(['description', 'qty', 'createdAt', 'partId']) &&
           request.resource.data.keys().hasAll(['description', 'qty']) &&
+          request.resource.data.get('partId', '') is string &&
+          (request.resource.data.get('partId', '') == '' ||
+            exists(/databases/$(database)/documents/parts/$(request.resource.data.get('partId', '')))) &&
           request.resource.data.description is string &&
           request.resource.data.qty is number &&
           request.resource.data.qty >= 1;
         allow update: if canManageJobConsumables(jobId) &&
-          request.resource.data.keys().hasOnly(['description', 'qty', 'createdAt', 'updatedAt']) &&
+          request.resource.data.keys().hasOnly(['description', 'qty', 'createdAt', 'updatedAt', 'partId']) &&
           request.resource.data.keys().hasAll(['description', 'qty']) &&
           request.resource.data.diff(resource.data).affectedKeys().hasOnly(['description', 'qty', 'updatedAt']) &&
           request.resource.data.description is string &&
@@ -252,6 +255,26 @@ service cloud.firestore {
           request.resource.data.diff(resource.data).affectedKeys().hasOnly(['voided', 'voidReason', 'voidedBy', 'voidedAt']);
         allow delete: if false;
       }
+    }
+
+    function isValidPart(part) {
+      return part.keys().hasOnly(['name', 'sku', 'onHand', 'reorderPoint', 'createdAt', 'updatedAt']) &&
+        part.keys().hasAll(['name', 'onHand', 'reorderPoint']) &&
+        part.name is string && part.name.size() > 0 &&
+        part.onHand is number && part.onHand >= 0 &&
+        part.reorderPoint is number && part.reorderPoint >= 0 &&
+        part.get('sku', '') is string;
+    }
+
+    match /parts/{partId} {
+      allow read: if isAdmin() || isAdminAssistant() || isVerifiedTech();
+      allow create: if isAdmin() && isValidPart(request.resource.data);
+      allow update: if isAdmin() && isValidPart(request.resource.data);
+      allow delete: if isAdmin();
+    }
+
+    match /stockEvents/{eventId} {
+      allow read, write: if false;
     }
 
     match /{path=**}/consumables/{itemId} {

@@ -2,7 +2,8 @@ import { doc, updateDoc } from 'firebase/firestore';
 import { db, auth } from '../firebase';
 import { Wrench, Clock, MapPin, Trash2, List, CheckCircle, Plus, FileText, Shield, Download } from 'lucide-react';
 import { formatSchedule, getJobStatusLabel } from '../lib/jobTime';
-import { calcInvoiceTotal, generateInvoicePdf } from '../lib/invoice';
+import { generateInvoicePdf } from '../lib/invoice';
+import { calcInvoiceTotal } from '../lib/invoiceTotals';
 import { getReceivableStatus } from '../lib/payments';
 import { isFieldRole } from '../lib/roles';
 import { formatDate, getPhotoCount, getCheckoutBlockReason } from '../lib/jobDisplay';
@@ -11,6 +12,7 @@ import JobMedia from './JobMedia';
 
 export default function ActiveJobs({
   profile,
+  parts,
   showJobsPanel,
   setShowJobsPanel,
   jobSearch,
@@ -300,6 +302,25 @@ export default function ActiveJobs({
                     </div>
                     {canEditConsumables && (
                       <div className="mt-4 space-y-3">
+                        {parts.length > 0 && (
+                          <select
+                            value={newConsumable.partId}
+                            onChange={(e) => {
+                              const part = parts.find((item) => item.id === e.target.value);
+                              setNewConsumable((prev) => ({
+                                ...prev,
+                                partId: e.target.value,
+                                description: part ? part.name : prev.description,
+                              }));
+                            }}
+                            className="w-full rounded-2xl border border-slate-700 bg-slate-900 px-4 py-3 text-slate-100"
+                          >
+                            <option value="">Not from inventory</option>
+                            {parts.map((part) => (
+                              <option key={part.id} value={part.id}>{part.name} ({part.onHand} on hand)</option>
+                            ))}
+                          </select>
+                        )}
                         <input
                           value={newConsumable.description}
                           onChange={(e) => setNewConsumable((prev) => ({ ...prev, description: e.target.value }))}

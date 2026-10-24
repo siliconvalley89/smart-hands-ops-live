@@ -1,6 +1,7 @@
 import { addDoc, collection, doc, updateDoc } from 'firebase/firestore';
 import { db } from '../firebase';
-import { calcInvoiceTotal, NET_TERMS_DAYS } from './invoice';
+import { NET_TERMS_DAYS } from './invoice';
+import { calcInvoiceTotal } from './invoiceTotals';
 import { toMillis } from './jobTime';
 
 export const PAYMENT_METHODS = [

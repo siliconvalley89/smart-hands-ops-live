@@ -22,6 +22,7 @@ import ReceivablesSection from './features/ReceivablesSection';
 import useAuthProfile from './hooks/useAuthProfile';
 import useJobs from './hooks/useJobs';
 import useTechs from './hooks/useTechs';
+import useParts from './hooks/useParts';
 import useUsers from './hooks/useUsers';
 import { getCheckoutBlockReason } from './lib/jobDisplay';
 import TechNameWithPhoto from './features/TechNameWithPhoto';
@@ -29,6 +30,9 @@ import ActiveJobs from './features/ActiveJobs';
 import SchedulingBoard from './features/SchedulingBoard';
 import AssetHistory from './features/AssetHistory';
 import AuditLog from './features/AuditLog';
+import TimesheetExport from './features/TimesheetExport';
+import ReportsPanel from './features/ReportsPanel';
+import PartsInventory from './features/PartsInventory';
 import CompletedJobs from './features/CompletedJobs';
 import RequestForm from './features/RequestForm';
 import Accounts from './features/Accounts';
@@ -122,7 +126,7 @@ function App() {
   const [requestForm, setRequestForm] = useState({ name: '', email: '', phone: '', location: '', service: '', details: '', serialNumber: '', scheduledFor: '', scheduledEndTime: '' });
   const [requestSuccess, setRequestSuccess] = useState('');
   const [requestError, setRequestError] = useState('');
-  const [newConsumable, setNewConsumable] = useState({ description: '', qty: 1, unitPrice: '' });
+  const [newConsumable, setNewConsumable] = useState({ description: '', qty: 1, unitPrice: '', partId: '' });
   const [serviceFeeInputs, setServiceFeeInputs] = useState({});
   const [consumableEdits, setConsumableEdits] = useState({});
   const [newAccount, setNewAccount] = useState({ name: '', email: '', password: '', role: 'tech', phone: '', location: '', adminPassword: '' });
@@ -159,6 +163,9 @@ function App() {
   const COMPLETED_PAGE_SIZE = 25;
 
   const techs = useTechs(firebaseUser);
+  const canReadParts = profile?.role === 'admin' || profile?.role === 'adminAssistant' ||
+    (['tech', 'seniorConsultant'].includes(profile?.role) && firebaseUser?.emailVerified === true);
+  const parts = useParts(canReadParts);
 
   useEffect(() => {
     if (!isFieldRole(profile?.role) || !profile.profilePhotoUrl || !firebaseUser?.uid) return;
@@ -591,6 +598,7 @@ function App() {
         description: newConsumable.description,
         qty: Number(newConsumable.qty),
         createdAt: new Date(),
+        ...(newConsumable.partId ? { partId: newConsumable.partId } : {}),
       });
       if (profile?.role === 'admin') {
         batch.set(doc(db, 'jobBilling', job.id), {
@@ -599,7 +607,7 @@ function App() {
         }, { merge: true });
       }
       await batch.commit();
-      setNewConsumable({ description: '', qty: 1, unitPrice: '' });
+      setNewConsumable({ description: '', qty: 1, unitPrice: '', partId: '' });
     } catch (error) {
       console.error('Add consumable failed', error);
       setAppError('Unable to add consumable.');
@@ -1402,9 +1410,13 @@ function App() {
 
         {canStaffManage && <AssetHistory />}
         {isAdmin && <AuditLog />}
+        {isAdmin && <TimesheetExport />}
+        {isAdmin && <ReportsPanel />}
+        {isAdmin && <PartsInventory parts={parts} />}
 
         <ActiveJobs
           profile={profile}
+          parts={parts}
           showJobsPanel={showJobsPanel}
           setShowJobsPanel={setShowJobsPanel}
           jobSearch={jobSearch}

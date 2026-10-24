@@ -4,10 +4,7 @@ import { db, storage, auth } from '../firebase';
 import logoPath from '../assets/sv-smart-dispatch-logo.jpg';
 import { loadImageDataUrl } from './media';
 import { BUSINESS_NAME } from './branding';
-
-export const calcInvoiceTotal = (items = [], serviceFee = 0) => {
-  return items.reduce((sum, item) => sum + (Number(item.qty || 0) * Number(item.unitPrice || 0)), 0) + Number(serviceFee || 0);
-};
+import { calcInvoiceTotal } from './invoiceTotals';
 
 export const NET_TERMS_DAYS = 30;
 

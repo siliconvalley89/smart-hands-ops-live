@@ -2,7 +2,8 @@ import { Shield, Trash2 } from 'lucide-react';
 import TechNameWithPhoto from './TechNameWithPhoto';
 import CompletedJobPhotos from './CompletedJobPhotos';
 import { formatDate, getPhotoCount } from '../lib/jobDisplay';
-import { calcInvoiceTotal, generateInvoicePdf } from '../lib/invoice';
+import { generateInvoicePdf } from '../lib/invoice';
+import { calcInvoiceTotal } from '../lib/invoiceTotals';
 import { getReceivableStatus } from '../lib/payments';
 
 export default function CompletedJobs({

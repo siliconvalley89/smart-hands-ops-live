@@ -3,6 +3,7 @@ const { onRequest, onCall, HttpsError } = require('firebase-functions/v2/https')
 const { onSchedule } = require('firebase-functions/v2/scheduler');
 const { defineSecret } = require('firebase-functions/params');
 const admin = require('firebase-admin');
+const { partStockAdjustments } = require('./stock');
 
 admin.initializeApp();
 
@@ -311,6 +312,24 @@ exports.refreshPhotoCountsOnPhotoWrite = onDocumentWritten('jobs/{jobId}/photos/
 
 exports.refreshPhotoCountsOnFileWrite = onDocumentWritten('jobs/{jobId}/files/{fileId}', async (event) => {
   await refreshJobMediaCounts(event.params.jobId);
+  return null;
+});
+
+exports.syncPartStockOnConsumableWrite = onDocumentWritten('jobs/{jobId}/consumables/{itemId}', async (event) => {
+  const adjustments = partStockAdjustments(event.data?.before?.data(), event.data?.after?.data());
+  const partIds = Object.keys(adjustments);
+  if (!partIds.length) return null;
+  const db = admin.firestore();
+  const markerRef = db.collection('stockEvents').doc(event.id);
+  await db.runTransaction(async (tx) => {
+    if ((await tx.get(markerRef)).exists) return;
+    const partRefs = partIds.map((partId) => db.collection('parts').doc(partId));
+    const partSnaps = await Promise.all(partRefs.map((ref) => tx.get(ref)));
+    partSnaps.forEach((snap, index) => {
+      if (snap.exists) tx.update(partRefs[index], { onHand: admin.firestore.FieldValue.increment(adjustments[partIds[index]]) });
+    });
+    tx.set(markerRef, { createdAt: new Date() });
+  });
   return null;
 });
 
