@@ -1,6 +1,6 @@
 import { doc, getDoc, updateDoc } from 'firebase/firestore';
 import { ref, uploadBytes } from 'firebase/storage';
-import { db, storage } from '../firebase';
+import { db, storage, auth } from '../firebase';
 import logoPath from '../assets/sv-smart-dispatch-logo.jpg';
 import { loadImageDataUrl } from './media';
 import { BUSINESS_NAME } from './branding';
@@ -207,6 +207,8 @@ export const generateInvoicePdf = async (job, onError) => {
     await updateDoc(doc(db, 'jobs', job.id), {
       invoiceSent: true,
       invoiceSentAt: new Date(),
+      updatedAt: new Date(),
+      updatedBy: auth.currentUser?.email,
     });
   } catch (error) {
     console.warn('Could not mark invoice as sent', error);

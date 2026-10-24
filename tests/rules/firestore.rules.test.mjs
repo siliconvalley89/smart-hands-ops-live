@@ -2,13 +2,16 @@ import { after, before, beforeEach, describe, it } from 'node:test';
 import { readFileSync } from 'node:fs';
 import { assertFails, assertSucceeds, initializeTestEnvironment } from '@firebase/rules-unit-testing';
 import {
+  collection,
   collectionGroup,
   doc,
   getDoc,
   getDocs,
+  query,
   setDoc,
   updateDoc,
   deleteDoc,
+  where,
 } from 'firebase/firestore';
 
 const ADMIN = 'admin@test.dev';
@@ -55,6 +58,7 @@ const SEED = [
   ['invoiceBilling/invoice_details', { companyName: 'Silicon Valley Smart Hands LLC' }],
   ['systemMetadata/billingMigration', { done: true }],
   ['badges/tech-uid', { role: 'tech' }],
+  ['auditLog/seed-1', { entityType: 'job', jobId: 'job-open', action: 'created', actorEmail: ADMIN, createdAt: new Date() }],
 ];
 
 let testEnv;
@@ -109,7 +113,7 @@ const newPayment = (overrides = {}) => ({
 
 const newJob = (overrides = {}) => ({
   client: 'Globex', clientEmail: CLIENT, status: 'Pending', billingMigrated: true,
-  invoiceSent: false, createdByRole: 'adminAssistant', ...overrides,
+  invoiceSent: false, createdByRole: 'adminAssistant', updatedBy: ASSISTANT, ...overrides,
 });
 
 describe('jobs', () => {
@@ -153,49 +157,61 @@ describe('jobs', () => {
   });
 
   it('client creates a pending request for self without tech fields', async () => {
-    await assertSucceeds(setDoc(doc(as.client(), 'jobs/new-client-1'), newJob({ createdByRole: 'client' })));
+    await assertSucceeds(setDoc(doc(as.client(), 'jobs/new-client-1'), newJob({ createdByRole: 'client', updatedBy: CLIENT })));
   });
 
   it('client cannot create a job with a status other than Pending', async () => {
-    await assertFails(setDoc(doc(as.client(), 'jobs/new-client-2'), newJob({ createdByRole: 'client', status: 'Assigned' })));
+    await assertFails(setDoc(doc(as.client(), 'jobs/new-client-2'), newJob({ createdByRole: 'client', updatedBy: CLIENT, status: 'Assigned' })));
   });
 
   it('client cannot pick a technician when creating a job', async () => {
     await assertFails(setDoc(doc(as.client(), 'jobs/new-client-3'), newJob({
-      createdByRole: 'client', assignedTechEmail: TECH, assignedTechName: 'Tia',
+      createdByRole: 'client', updatedBy: CLIENT, assignedTechEmail: TECH, assignedTechName: 'Tia',
     })));
   });
 
   it('client cannot create a job for another client or as admin', async () => {
-    await assertFails(setDoc(doc(as.client(), 'jobs/new-client-4'), newJob({ createdByRole: 'client', clientEmail: OTHER_CLIENT })));
-    await assertFails(setDoc(doc(as.client(), 'jobs/new-client-5'), newJob({ createdByRole: 'admin' })));
+    await assertFails(setDoc(doc(as.client(), 'jobs/new-client-4'), newJob({ createdByRole: 'client', updatedBy: CLIENT, clientEmail: OTHER_CLIENT })));
+    await assertFails(setDoc(doc(as.client(), 'jobs/new-client-5'), newJob({ createdByRole: 'admin', updatedBy: CLIENT })));
   });
 
-  it('assigned tech advances status', async () => {
-    await assertSucceeds(updateDoc(doc(as.tech(), 'jobs/job-open'), { status: 'En Route' }));
+  it('creates must be attributed to the signed-in user', async () => {
+    await assertFails(setDoc(doc(as.assistant(), 'jobs/new-4'), newJob({ updatedBy: ADMIN })));
+    await assertFails(setDoc(doc(as.client(), 'jobs/new-client-6'), newJob({ createdByRole: 'client' })));
+  });
+
+  it('assigned tech advances status when attributed to themself', async () => {
+    await assertSucceeds(updateDoc(doc(as.tech(), 'jobs/job-open'), { status: 'En Route', updatedBy: TECH, updatedAt: new Date() }));
+  });
+
+  it('tech status writes must be attributed to themself', async () => {
+    await assertFails(updateDoc(doc(as.tech(), 'jobs/job-open'), { status: 'En Route', updatedAt: new Date() }));
+    await assertFails(updateDoc(doc(as.tech(), 'jobs/job-open'), { status: 'En Route', updatedBy: ADMIN, updatedAt: new Date() }));
   });
 
   it('assigned tech cannot change client-only or billing fields', async () => {
-    await assertFails(updateDoc(doc(as.tech(), 'jobs/job-open'), { clientSignedOff: true }));
-    await assertFails(updateDoc(doc(as.tech(), 'jobs/job-open'), { serviceFee: 1 }));
+    await assertFails(updateDoc(doc(as.tech(), 'jobs/job-open'), { clientSignedOff: true, updatedBy: TECH }));
+    await assertFails(updateDoc(doc(as.tech(), 'jobs/job-open'), { serviceFee: 1, updatedBy: TECH }));
   });
 
   it('assistant can reassign a tech on an open job but not close it', async () => {
     await assertSucceeds(updateDoc(doc(as.assistant(), 'jobs/job-open'), {
-      assignedTechEmail: SENIOR, assignedTechName: 'Sam',
+      assignedTechEmail: SENIOR, assignedTechName: 'Sam', updatedBy: ASSISTANT, updatedAt: new Date(),
     }));
-    await assertFails(updateDoc(doc(as.assistant(), 'jobs/job-open'), { status: 'Completed' }));
+    await assertFails(updateDoc(doc(as.assistant(), 'jobs/job-open'), { status: 'Completed', updatedBy: ASSISTANT }));
+    await assertFails(updateDoc(doc(as.assistant(), 'jobs/job-open'), { assignedTechEmail: SENIOR, updatedBy: ADMIN }));
   });
 
   it('owner client signs off a ready job only, without completing it', async () => {
-    await assertSucceeds(updateDoc(doc(as.client(), 'jobs/job-ready'), { clientSignedOff: true }));
-    await assertFails(updateDoc(doc(as.client(), 'jobs/job-open'), { clientSignedOff: true }));
-    await assertFails(updateDoc(doc(as.otherClient(), 'jobs/job-ready'), { clientSignedOff: true }));
+    await assertSucceeds(updateDoc(doc(as.client(), 'jobs/job-ready'), { clientSignedOff: true, updatedBy: CLIENT, updatedAt: new Date() }));
+    await assertFails(updateDoc(doc(as.client(), 'jobs/job-open'), { clientSignedOff: true, updatedBy: CLIENT, updatedAt: new Date() }));
+    await assertFails(updateDoc(doc(as.otherClient(), 'jobs/job-ready'), { clientSignedOff: true, updatedBy: OTHER_CLIENT, updatedAt: new Date() }));
+    await assertFails(updateDoc(doc(as.client(), 'jobs/job-ready'), { clientSignedOff: true, updatedBy: ADMIN, updatedAt: new Date() }));
   });
 
   it('owner client cannot set status to Completed', async () => {
-    await assertFails(updateDoc(doc(as.client(), 'jobs/job-ready'), { status: 'Completed', clientSignedOff: true }));
-    await assertFails(updateDoc(doc(as.client(), 'jobs/job-ready'), { status: 'Completed' }));
+    await assertFails(updateDoc(doc(as.client(), 'jobs/job-ready'), { status: 'Completed', clientSignedOff: true, updatedBy: CLIENT }));
+    await assertFails(updateDoc(doc(as.client(), 'jobs/job-ready'), { status: 'Completed', updatedBy: CLIENT }));
   });
 
   it('only admin deletes jobs', async () => {
@@ -209,13 +225,13 @@ describe('scheduling', () => {
   const end = new Date('2026-11-02T19:00:00Z');
 
   it('assistant sets a time on an open job', async () => {
-    await assertSucceeds(updateDoc(doc(as.assistant(), 'jobs/job-open'), { scheduledFor: start, scheduledEnd: end, updatedAt: new Date() }));
+    await assertSucceeds(updateDoc(doc(as.assistant(), 'jobs/job-open'), { scheduledFor: start, scheduledEnd: end, updatedBy: ASSISTANT, updatedAt: new Date() }));
   });
 
   it('assistant reassigns and reschedules an open job in one write', async () => {
     await assertSucceeds(updateDoc(doc(as.assistant(), 'jobs/job-open'), {
       assignedTechName: 'Sam', assignedTechEmail: SENIOR, assignedTechDistanceMiles: null, assignedTechDistanceKm: null,
-      status: 'Assigned', statusUpdatedByRole: 'adminAssistant', scheduledFor: start, scheduledEnd: end, updatedAt: new Date(),
+      status: 'Assigned', statusUpdatedByRole: 'adminAssistant', scheduledFor: start, scheduledEnd: end, updatedBy: ASSISTANT, updatedAt: new Date(),
     }));
   });
 
@@ -377,6 +393,23 @@ describe('payments', () => {
   it('collection group read is admin only', async () => {
     await assertSucceeds(getDocs(collectionGroup(as.admin(), 'payments')));
     await assertFails(getDocs(collectionGroup(as.assistant(), 'payments')));
+  });
+});
+
+describe('audit log', () => {
+  it('admin reads entries for one job', async () => {
+    await assertSucceeds(getDocs(query(collection(as.admin(), 'auditLog'), where('jobId', '==', 'job-open'))));
+  });
+
+  it('no one but admin reads the audit log', async () => {
+    await assertFails(getDocs(collection(as.assistant(), 'auditLog')));
+    await assertFails(getDocs(collection(as.tech(), 'auditLog')));
+    await assertFails(getDocs(collection(as.client(), 'auditLog')));
+  });
+
+  it('no client can write or delete audit entries, admin included', async () => {
+    await assertFails(setDoc(doc(as.admin(), 'auditLog/forged'), { entityType: 'job', jobId: 'job-open', action: 'deleted', actorEmail: TECH }));
+    await assertFails(deleteDoc(doc(as.admin(), 'auditLog/seed-1')));
   });
 });
 

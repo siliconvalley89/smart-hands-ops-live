@@ -28,6 +28,7 @@ import TechNameWithPhoto from './features/TechNameWithPhoto';
 import ActiveJobs from './features/ActiveJobs';
 import SchedulingBoard from './features/SchedulingBoard';
 import AssetHistory from './features/AssetHistory';
+import AuditLog from './features/AuditLog';
 import CompletedJobs from './features/CompletedJobs';
 import RequestForm from './features/RequestForm';
 import Accounts from './features/Accounts';
@@ -295,6 +296,7 @@ function App() {
         invoiceSent: false,
         clientSignedOff: false,
         createdAt: new Date(),
+        updatedBy: firebaseUser?.email,
       });
       setRequestSuccess('Request submitted.');
       setRequestForm({
@@ -481,6 +483,7 @@ function App() {
 
       const payload = {
         updatedAt: new Date(),
+        updatedBy: firebaseUser?.email,
       };
 
       if (eventType === 'checkIn') {
@@ -729,11 +732,13 @@ function App() {
       status: 'Ready for Signoff',
       statusUpdatedByRole: profile.role,
       signoffRequestedAt: new Date(),
+      updatedAt: new Date(),
+      updatedBy: firebaseUser?.email,
     });
   };
 
   const handleClientSignoff = async (job) => {
-    await updateDoc(doc(db, 'jobs', job.id), { clientSignedOff: true });
+    await updateDoc(doc(db, 'jobs', job.id), { clientSignedOff: true, updatedAt: new Date(), updatedBy: firebaseUser?.email });
   };
 
   const handlePhotoUpload = async (event, job, type) => {
@@ -862,6 +867,8 @@ function App() {
   const handleDelete = async (jobId) => {
     if (!(await askConfirm('Are you sure you want to delete this job? This action cannot be undone.'))) return;
     try {
+      // Stamp the deleter first so the delete entry in the audit log names them
+      await updateDoc(doc(db, 'jobs', jobId), { updatedAt: new Date(), updatedBy: firebaseUser?.email });
       await deleteDoc(doc(db, 'jobs', jobId));
     } catch (error) {
       console.error('Delete job failed', error);
@@ -873,7 +880,7 @@ function App() {
     const edits = jobEdits[job.id];
     if (!edits || Object.keys(edits).length === 0) { setEditingJobId(null); return; }
     try {
-      await updateDoc(doc(db, 'jobs', job.id), { ...edits, updatedAt: new Date() });
+      await updateDoc(doc(db, 'jobs', job.id), { ...edits, updatedAt: new Date(), updatedBy: firebaseUser?.email });
       setEditingJobId(null);
       setJobEdits((prev) => { const next = { ...prev }; delete next[job.id]; return next; });
     } catch (error) {
@@ -889,7 +896,7 @@ function App() {
     }
     try {
       const signedOffAt = new Date();
-      const updates = { adminSignedOff: true, adminSignedOffAt: signedOffAt };
+      const updates = { adminSignedOff: true, adminSignedOffAt: signedOffAt, updatedAt: signedOffAt, updatedBy: firebaseUser?.email };
       if (!job.invoicePdfPath) {
         updates.invoicePdfPath = await uploadInvoicePdf(job, signedOffAt);
         updates.invoiceSent = true;
@@ -942,7 +949,7 @@ function App() {
     }
 
     try {
-      await updateDoc(doc(db, 'jobs', job.id), buildAssignmentUpdates(job, tech));
+      await updateDoc(doc(db, 'jobs', job.id), { ...buildAssignmentUpdates(job, tech), updatedAt: new Date(), updatedBy: firebaseUser?.email });
       // Cloud Function (manageTechStatusOnJobUpdated) marks techs busy only while en route / on site
 
       setAppError('');
@@ -981,6 +988,7 @@ function App() {
         scheduledFor: new Date(startMs),
         scheduledEnd: new Date(endMs),
         updatedAt: new Date(),
+        updatedBy: firebaseUser?.email,
       };
       if (!sameTech) Object.assign(updates, buildAssignmentUpdates(job, tech));
       await updateDoc(doc(db, 'jobs', job.id), updates);
@@ -1393,6 +1401,7 @@ function App() {
         )}
 
         {canStaffManage && <AssetHistory />}
+        {isAdmin && <AuditLog />}
 
         <ActiveJobs
           profile={profile}

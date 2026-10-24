@@ -733,6 +733,81 @@ exports.syncRoleClaim = onDocumentWritten('users/{uid}', async (event) => {
 // ── Website form → Firestore job ──────────────────────────────────────────────
 // Called by your business website's contact/service form.
 // Replace the cors origin with your website's actual domain for tighter security.
+// ── Audit log: job changes and payment events, written server-side and readable by admins only ──
+const AUDIT_IGNORED_JOB_FIELDS = ['updatedAt', 'updatedBy', 'photoCounts'];
+const AUDIT_DETAIL_FIELDS = ['client', 'task', 'status', 'scheduledFor'];
+
+function auditValue(value) {
+  if (value === undefined) return null;
+  if (value && typeof value.toDate === 'function') return value.toDate().toISOString();
+  if (value instanceof Date) return value.toISOString();
+  if (value === null || typeof value !== 'object') return value;
+  return '(object)';
+}
+
+function auditDetails(data) {
+  return Object.fromEntries(AUDIT_DETAIL_FIELDS.map((field) => [field, auditValue(data[field])]));
+}
+
+exports.auditJobWrites = onDocumentWritten('jobs/{jobId}', async (event) => {
+  const before = event.data.before.exists ? event.data.before.data() : null;
+  const after = event.data.after.exists ? event.data.after.data() : null;
+  const base = { entityType: 'job', jobId: event.params.jobId, createdAt: admin.firestore.FieldValue.serverTimestamp() };
+
+  if (!before && after) {
+    await admin.firestore().collection('auditLog').add({ ...base, action: 'created', actorEmail: after.updatedBy || null, details: auditDetails(after) });
+    return null;
+  }
+  if (before && !after) {
+    // Deletes are preceded by a client stamp of updatedBy, so the last editor is recorded
+    await admin.firestore().collection('auditLog').add({ ...base, action: 'deleted', actorEmail: before.updatedBy || null, details: auditDetails(before) });
+    return null;
+  }
+
+  const changes = {};
+  const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
+  for (const key of keys) {
+    if (AUDIT_IGNORED_JOB_FIELDS.includes(key)) continue;
+    if (JSON.stringify(before[key]) === JSON.stringify(after[key])) continue;
+    changes[key] = { from: auditValue(before[key]), to: auditValue(after[key]) };
+  }
+  if (Object.keys(changes).length === 0) return null;
+
+  // Client writes always bump updatedAt together with updatedBy; server writes leave both alone
+  const clientWrite = auditValue(before.updatedAt) !== auditValue(after.updatedAt);
+  await admin.firestore().collection('auditLog').add({
+    ...base,
+    action: 'updated',
+    actorEmail: clientWrite ? (after.updatedBy || null) : null,
+    changes,
+  });
+  return null;
+});
+
+exports.auditPaymentWrites = onDocumentWritten('jobs/{jobId}/payments/{paymentId}', async (event) => {
+  const before = event.data.before.exists ? event.data.before.data() : null;
+  const after = event.data.after.exists ? event.data.after.data() : null;
+  if (!after) return null;
+
+  const base = { entityType: 'payment', jobId: event.params.jobId, paymentId: event.params.paymentId, createdAt: admin.firestore.FieldValue.serverTimestamp() };
+  if (!before) {
+    await admin.firestore().collection('auditLog').add({
+      ...base,
+      action: 'recorded',
+      actorEmail: after.recordedBy || null,
+      details: { amount: after.amount, method: after.method, reference: after.reference || '' },
+    });
+  } else if (!before.voided && after.voided) {
+    await admin.firestore().collection('auditLog').add({
+      ...base,
+      action: 'voided',
+      actorEmail: after.voidedBy || null,
+      details: { amount: after.amount, method: after.method, reason: after.voidReason || '' },
+    });
+  }
+  return null;
+});
+
 // Staff-only serial number lookup; returns just the fields asset history needs, including completed visits
 exports.lookupAssetHistory = onCall(async (request) => {
   const role = request.auth?.token?.role;

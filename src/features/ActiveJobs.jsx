@@ -1,5 +1,5 @@
 import { doc, updateDoc } from 'firebase/firestore';
-import { db } from '../firebase';
+import { db, auth } from '../firebase';
 import { Wrench, Clock, MapPin, Trash2, List, CheckCircle, Plus, FileText, Shield, Download } from 'lucide-react';
 import { formatSchedule, getJobStatusLabel } from '../lib/jobTime';
 import { calcInvoiceTotal, generateInvoicePdf } from '../lib/invoice';
@@ -488,7 +488,7 @@ export default function ActiveJobs({
                   <div className="flex flex-wrap gap-3">
                     {isFieldRole(profile.role) && !job.checkInAt && job.status !== 'En Route' && (
                       <button
-                        onClick={() => updateDoc(doc(db, 'jobs', job.id), { status: 'En Route', statusUpdatedByRole: profile.role, enRouteAt: new Date(), updatedAt: new Date() })}
+                        onClick={() => updateDoc(doc(db, 'jobs', job.id), { status: 'En Route', statusUpdatedByRole: profile.role, enRouteAt: new Date(), updatedAt: new Date(), updatedBy: auth.currentUser?.email })}
                         className="rounded-2xl bg-amber-600 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-500 transition flex items-center gap-2"
                       >
                         <MapPin size={16} /> Start en route
@@ -539,7 +539,7 @@ export default function ActiveJobs({
                         <input
                           type="checkbox"
                           checked={Boolean(job.geofenceOverride)}
-                          onChange={(e) => updateDoc(doc(db, 'jobs', job.id), { geofenceOverride: e.target.checked, updatedAt: new Date() }).catch(() => setAppError('Unable to update site check-in override.'))}
+                          onChange={(e) => updateDoc(doc(db, 'jobs', job.id), { geofenceOverride: e.target.checked, updatedAt: new Date(), updatedBy: auth.currentUser?.email }).catch(() => setAppError('Unable to update site check-in override.'))}
                         />
                         Allow check-in from anywhere (remote job)
                       </label>

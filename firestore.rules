@@ -132,8 +132,9 @@ service cloud.firestore {
             'task', 'details', 'serialNumber', 'scheduledFor', 'scheduledEnd', 'status',
             'assignedTechName', 'assignedTechEmail', 'assignedTechDistanceMiles',
             'assignedTechDistanceKm', 'billingMigrated', 'invoiceSent',
-            'clientSignedOff', 'createdAt', 'createdByRole'
+            'clientSignedOff', 'createdAt', 'createdByRole', 'updatedBy'
           ]) &&
+          request.resource.data.get('updatedBy', '') == request.auth.token.email &&
           request.resource.data.get('invoiceSent', false) == false) ||
         (isVerifiedClient() &&
           request.resource.data.clientEmail == request.auth.token.email &&
@@ -144,8 +145,9 @@ service cloud.firestore {
             'client', 'clientEmail', 'clientPhone', 'location', 'rawLocation', 'lat', 'lng',
             'task', 'details', 'serialNumber', 'scheduledFor', 'scheduledEnd', 'status',
             'billingMigrated', 'invoiceSent',
-            'clientSignedOff', 'createdAt', 'createdByRole'
-          ]))
+            'clientSignedOff', 'createdAt', 'createdByRole', 'updatedBy'
+          ]) &&
+          request.resource.data.get('updatedBy', '') == request.auth.token.email)
       );
 
       allow update: if isSignedIn() && (
@@ -155,26 +157,29 @@ service cloud.firestore {
           request.resource.data.status in ['Pending', 'Assigned', 'Dispatched', 'En Route', 'On Site'] &&
           request.resource.data.diff(resource.data).affectedKeys().hasOnly([
             'assignedTechName', 'assignedTechEmail', 'assignedTechDistanceMiles',
-            'assignedTechDistanceKm', 'status', 'statusUpdatedByRole', 'updatedAt',
+            'assignedTechDistanceKm', 'status', 'statusUpdatedByRole', 'updatedAt', 'updatedBy',
             'scheduledFor', 'scheduledEnd'
           ]) &&
+          request.resource.data.get('updatedBy', '') == request.auth.token.email &&
           (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['scheduledFor', 'scheduledEnd']) ||
             resource.data.status in ['Pending', 'Assigned', 'Dispatched'])) ||
         (isVerifiedTech() &&
           resource.data.assignedTechEmail == request.auth.token.email &&
           jobHasNoEmbeddedBilling(resource.data) &&
           request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-            'status', 'statusUpdatedByRole', 'enRouteAt', 'updatedAt',
+            'status', 'statusUpdatedByRole', 'enRouteAt', 'updatedAt', 'updatedBy',
             'checkInAt', 'checkInLat', 'checkInLng',
             'checkOutAt', 'checkOutLat', 'checkOutLng',
             'breaks', 'signoffRequestedAt'
           ]) &&
+          request.resource.data.get('updatedBy', '') == request.auth.token.email &&
           request.resource.data.status in ['Assigned', 'Dispatched', 'En Route', 'On Site', 'Ready for Signoff']) ||
         // Clients can only sign off their own job once work is ready; admins mark it Completed
         (isVerifiedClient() && resource.data.clientEmail == request.auth.token.email &&
           resource.data.status == 'Ready for Signoff' &&
           request.resource.data.clientSignedOff == true &&
-          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['clientSignedOff']))
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['clientSignedOff', 'updatedAt', 'updatedBy']) &&
+          request.resource.data.get('updatedBy', '') == request.auth.token.email)
       );
       allow delete: if isAdmin();
 
@@ -268,6 +273,11 @@ service cloud.firestore {
     match /invoiceBilling/{docId} {
       allow read: if isAdmin() || isClient();
       allow write: if isAdmin();
+    }
+
+    match /auditLog/{entryId} {
+      allow read: if isAdmin();
+      allow write: if false;
     }
 
     match /systemMetadata/{documentId} {
