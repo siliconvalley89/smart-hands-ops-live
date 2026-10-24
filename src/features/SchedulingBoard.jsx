@@ -24,6 +24,7 @@ const dayLabel = (day) => day.toLocaleDateString('en-US', { weekday: 'short', mo
 
 export default function SchedulingBoard({ activeJobs, techs, onMoveJob }) {
   const [anchor, setAnchor] = useState(() => new Date());
+  const [showGrid, setShowGrid] = useState(true);
   const dragRef = useRef(null);
   const days = getWeekDays(anchor);
   const todayString = new Date().toDateString();
@@ -81,13 +82,15 @@ export default function SchedulingBoard({ activeJobs, techs, onMoveJob }) {
           <button type="button" onClick={() => shiftWeeks(-1)} className="rounded-2xl border border-slate-600 px-3 py-2 text-slate-200 hover:bg-slate-700 transition">Prev</button>
           <button type="button" onClick={() => setAnchor(new Date())} className="rounded-2xl border border-slate-600 px-3 py-2 text-slate-200 hover:bg-slate-700 transition">Today</button>
           <button type="button" onClick={() => shiftWeeks(1)} className="rounded-2xl border border-slate-600 px-3 py-2 text-slate-200 hover:bg-slate-700 transition">Next</button>
+          <button type="button" onClick={() => setShowGrid((prev) => !prev)} className="rounded-2xl border border-slate-600 px-3 py-2 text-slate-200 hover:bg-slate-700 transition">{showGrid ? 'Collapse' : 'Expand'}</button>
           <span className="ml-2 text-slate-300 whitespace-nowrap">
             {days[0].toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} – {days[6].toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
           </span>
         </div>
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_260px]">
+      <div className={`grid gap-4 ${showGrid ? 'xl:grid-cols-[minmax(0,1fr)_260px]' : ''}`}>
+        {showGrid && (
         <div className="overflow-x-auto rounded-3xl border border-slate-700 bg-slate-900/70">
           <div style={{ minWidth: 140 + 7 * 130 }}>
             <div className="grid text-xs text-slate-400" style={{ gridTemplateColumns: '140px repeat(7, minmax(130px, 1fr))' }}>
@@ -141,6 +144,7 @@ export default function SchedulingBoard({ activeJobs, techs, onMoveJob }) {
             ))}
           </div>
         </div>
+        )}
 
         <aside className="rounded-3xl border border-slate-700 bg-slate-900/70 p-4">
           <h3 className="text-sm font-semibold text-white">Unscheduled assigned jobs</h3>
