@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { db, storage, auth } from './firebase';
-import { collection, onSnapshot, addDoc, query, orderBy, deleteDoc, doc, updateDoc, getDoc, setDoc, writeBatch } from 'firebase/firestore';
+import { collection, addDoc, deleteDoc, doc, updateDoc, getDoc, setDoc, writeBatch } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import {
   createUserWithEmailAndPassword,
@@ -22,6 +22,8 @@ import { getReceivableStatus } from './lib/payments';
 import Receivables from './features/Receivables';
 import useAuthProfile from './hooks/useAuthProfile';
 import useJobs from './hooks/useJobs';
+import useTechs from './hooks/useTechs';
+import useUsers from './hooks/useUsers';
 import { isFieldRole } from './lib/roles';
 import { BUSINESS_NAME, APP_DISPLAY_NAME } from './lib/branding';
 import {
@@ -150,7 +152,6 @@ function App() {
     confirmDialog?.resolve(result);
     setConfirmDialog(null);
   };
-  const [techs, setTechs] = useState([]);
   const [uploadingId, setUploadingId] = useState(null);
   const [uploadingFilesId, setUploadingFilesId] = useState(null);
   const [requestForm, setRequestForm] = useState({ name: '', email: '', phone: '', location: '', service: '', details: '', serialNumber: '', scheduledFor: '', scheduledEndTime: '' });
@@ -164,7 +165,6 @@ function App() {
   const [passwordForm, setPasswordForm] = useState({ current: '', next: '', confirm: '' });
   const [passwordMessage, setPasswordMessage] = useState('');
   const [assignments, setAssignments] = useState({});
-  const [users, setUsers] = useState([]);
   const [userRoleEdits, setUserRoleEdits] = useState({});
   const [showAddUserPanel, setShowAddUserPanel] = useState(false);
   const [showUsersPanel, setShowUsersPanel] = useState(false);
@@ -193,19 +193,7 @@ function App() {
   const { jobs, loading, jobBilling, jobPayments, jobConsumables, completedJobsData, completedLoading, completedTotal } = useJobs({ profile, firebaseUser, sessionRestoreCount, showCompletedJobsPanel, completedLimit, setAppError, suppressAuthStateRef });
   const COMPLETED_PAGE_SIZE = 25;
 
-  useEffect(() => {
-    if (!firebaseUser) return () => {};
-    const q = query(collection(db, 'technicians'), orderBy('name', 'asc'));
-    const unsubscribe = onSnapshot(
-      q,
-      (snapshot) => {
-        const techItems = snapshot.docs.map((docItem) => ({ id: docItem.id, ...docItem.data() }));
-        setTechs(techItems);
-      },
-      (error) => console.error('Unable to load technicians', error),
-    );
-    return () => unsubscribe();
-  }, [firebaseUser]);
+  const techs = useTechs(firebaseUser);
 
   useEffect(() => {
     if (!isFieldRole(profile?.role) || !profile.profilePhotoUrl || !firebaseUser?.uid) return;
@@ -215,19 +203,7 @@ function App() {
     }
   }, [techs, profile?.role, profile?.profilePhotoUrl, firebaseUser?.uid]);
 
-  useEffect(() => {
-    if (profile?.role !== 'admin') {
-      setUsers([]);
-      return () => {};
-    }
-
-    const q = query(collection(db, 'users'), orderBy('displayName', 'asc'));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const userItems = snapshot.docs.map((docItem) => ({ id: docItem.id, ...docItem.data() }));
-      setUsers(userItems);
-    });
-    return () => unsubscribe();
-  }, [profile?.role]);
+  const users = useUsers(profile);
 
   useEffect(() => {
     if (profile?.role === 'client') {
