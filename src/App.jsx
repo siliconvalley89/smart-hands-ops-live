@@ -209,6 +209,7 @@ function App() {
     const authUnsub = onAuthStateChanged(auth, async (user) => {
       if (suppressAuthStateRef.current) return;
       try {
+        if (user) setAuthReady(false);
         setFirebaseUser(user);
         if (user) {
           const userRef = doc(db, 'users', user.uid);
