@@ -131,8 +131,8 @@ service cloud.firestore {
             'client', 'clientEmail', 'clientPhone', 'location', 'rawLocation', 'lat', 'lng',
             'task', 'details', 'serialNumber', 'scheduledFor', 'scheduledEnd', 'status',
             'assignedTechName', 'assignedTechEmail', 'assignedTechDistanceMiles',
-            'assignedTechDistanceKm', 'billingMigrated', 'invoiceSent', 'beforePhotoUrl',
-            'afterPhotoUrl', 'clientSignedOff', 'createdAt', 'createdByRole'
+            'assignedTechDistanceKm', 'billingMigrated', 'invoiceSent',
+            'clientSignedOff', 'createdAt', 'createdByRole'
           ]) &&
           request.resource.data.get('invoiceSent', false) == false) ||
         (isVerifiedClient() &&
@@ -143,8 +143,8 @@ service cloud.firestore {
           request.resource.data.keys().hasOnly([
             'client', 'clientEmail', 'clientPhone', 'location', 'rawLocation', 'lat', 'lng',
             'task', 'details', 'serialNumber', 'scheduledFor', 'scheduledEnd', 'status',
-            'billingMigrated', 'invoiceSent', 'beforePhotoUrl',
-            'afterPhotoUrl', 'clientSignedOff', 'createdAt', 'createdByRole'
+            'billingMigrated', 'invoiceSent',
+            'clientSignedOff', 'createdAt', 'createdByRole'
           ]))
       );
 
@@ -164,7 +164,7 @@ service cloud.firestore {
             'status', 'statusUpdatedByRole', 'enRouteAt', 'updatedAt',
             'checkInAt', 'checkInLat', 'checkInLng',
             'checkOutAt', 'checkOutLat', 'checkOutLng',
-            'breaks', 'beforePhotoUrl', 'afterPhotoUrl', 'beforePhotos', 'afterPhotos', 'attachments', 'signoffRequestedAt'
+            'breaks', 'signoffRequestedAt'
           ]) &&
           request.resource.data.status in ['Assigned', 'Dispatched', 'En Route', 'On Site', 'Ready for Signoff']) ||
         // Clients can only sign off their own job once work is ready; admins mark it Completed

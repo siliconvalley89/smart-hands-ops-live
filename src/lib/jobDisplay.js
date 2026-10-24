@@ -6,17 +6,9 @@ export const formatDate = (value) => {
   return new Date(value).toLocaleString();
 };
 
-// Photo URLs still stored on the job document before the subcollection migration
-export const getLegacyPhotoUrls = (job, type) => {
-  const list = Array.isArray(job?.[`${type}Photos`]) ? job[`${type}Photos`] : [];
-  const legacy = job?.[`${type}PhotoUrl`];
-  return legacy && !list.includes(legacy) ? [legacy, ...list] : list;
-};
-
-// Count maintained by the refreshJobMediaCounts trigger; falls back to legacy arrays until it exists
 export const getPhotoCount = (job, type) => {
   const count = job?.photoCounts?.[type];
-  return typeof count === 'number' ? count : getLegacyPhotoUrls(job, type).length;
+  return typeof count === 'number' ? count : 0;
 };
 
 const MIN_CHECKOUT_BREAK_MS = 30 * 60 * 1000;

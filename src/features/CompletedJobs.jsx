@@ -25,7 +25,6 @@ export default function CompletedJobs({
   downloadPhotos,
   setAppError,
   adminSignOffWork,
-  runPhotoMigration,
   handleDelete,
 }) {
   return (
@@ -105,11 +104,6 @@ export default function CompletedJobs({
                       {(profile.role === 'admin' || job.adminSignedOff) && (
                         <button onClick={() => generateInvoicePdf(job, setAppError)} className="mt-2 rounded-2xl bg-teal-600 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-500 transition">
                           Download invoice
-                        </button>
-                      )}
-                      {profile.role === 'admin' && (
-                        <button onClick={runPhotoMigration} className="mt-2 ml-2 rounded-2xl border border-amber-500 px-4 py-2 text-sm font-semibold text-amber-300 hover:bg-amber-500/10 transition">
-                          Run photo migration
                         </button>
                       )}
                     </div>

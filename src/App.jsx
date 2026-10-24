@@ -1,8 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { db, storage, auth, functions } from './firebase';
+import { db, storage, auth } from './firebase';
 import { collection, addDoc, deleteDoc, doc, updateDoc, getDoc, setDoc, writeBatch } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-import { httpsCallable } from 'firebase/functions';
 import {
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
@@ -24,7 +23,7 @@ import useAuthProfile from './hooks/useAuthProfile';
 import useJobs from './hooks/useJobs';
 import useTechs from './hooks/useTechs';
 import useUsers from './hooks/useUsers';
-import { getLegacyPhotoUrls, getCheckoutBlockReason } from './lib/jobDisplay';
+import { getCheckoutBlockReason } from './lib/jobDisplay';
 import TechNameWithPhoto from './features/TechNameWithPhoto';
 import ActiveJobs from './features/ActiveJobs';
 import CompletedJobs from './features/CompletedJobs';
@@ -807,16 +806,7 @@ function App() {
   const deleteAttachment = async (job, file) => {
     if (!(await askConfirm(`Delete "${file.name}"? This action cannot be undone.`))) return;
     try {
-      if (file.legacy) {
-        const snap = await getDoc(doc(db, 'jobs', job.id));
-        const current = snap.exists() ? snap.data() : job;
-        await updateDoc(doc(db, 'jobs', job.id), {
-          attachments: (current.attachments || []).filter((a) => a.url !== file.url),
-          updatedAt: new Date(),
-        });
-      } else {
-        await deleteDoc(doc(db, 'jobs', job.id, 'files', file.id));
-      }
+      await deleteDoc(doc(db, 'jobs', job.id, 'files', file.id));
     } catch (error) {
       console.error('Delete file failed', error);
       setAppError('Unable to delete file.');
@@ -860,17 +850,7 @@ function App() {
   const deletePhoto = async (job, photo) => {
     if (!(await askConfirm(`Are you sure you want to delete this ${photo.type} photo? This action cannot be undone.`))) return;
     try {
-      if (photo.legacy) {
-        const snap = await getDoc(doc(db, 'jobs', job.id));
-        const current = snap.exists() ? snap.data() : job;
-        await updateDoc(doc(db, 'jobs', job.id), {
-          [`${photo.type}Photos`]: getLegacyPhotoUrls(current, photo.type).filter((u) => u !== photo.url),
-          [`${photo.type}PhotoUrl`]: '',
-          updatedAt: new Date(),
-        });
-      } else {
-        await deleteDoc(doc(db, 'jobs', job.id, 'photos', photo.id));
-      }
+      await deleteDoc(doc(db, 'jobs', job.id, 'photos', photo.id));
     } catch (error) {
       console.error('Delete photo failed', error);
       setAppError('Unable to delete photo.');
@@ -897,17 +877,6 @@ function App() {
     } catch (error) {
       console.error('Save job edits failed', error);
       setAppError('Unable to save job edits.');
-    }
-  };
-
-  const runPhotoMigration = async () => {
-    if (!window.confirm('Copy legacy photos and files on every job into subcollections? Run once.')) return;
-    try {
-      const { data } = await httpsCallable(functions, 'migrateJobPhotos')();
-      window.alert(`Migration done: ${data.jobs} jobs, ${data.photos} photos, ${data.files} files.`);
-    } catch (error) {
-      console.error('Photo migration failed', error);
-      setAppError(error.message || 'Photo migration failed.');
     }
   };
 
@@ -1451,7 +1420,6 @@ function App() {
             downloadPhotos={downloadPhotos}
             setAppError={setAppError}
             adminSignOffWork={adminSignOffWork}
-            runPhotoMigration={runPhotoMigration}
             handleDelete={handleDelete}
           />
         )}
