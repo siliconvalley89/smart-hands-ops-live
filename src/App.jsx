@@ -733,12 +733,7 @@ function App() {
   };
 
   const handleClientSignoff = async (job) => {
-    await updateDoc(doc(db, 'jobs', job.id), {
-      clientSignedOff: true,
-      status: 'Completed',
-      statusUpdatedByRole: profile.role,
-      completedAt: new Date(),
-    });
+    await updateDoc(doc(db, 'jobs', job.id), { clientSignedOff: true });
   };
 
   const handlePhotoUpload = async (event, job, type) => {

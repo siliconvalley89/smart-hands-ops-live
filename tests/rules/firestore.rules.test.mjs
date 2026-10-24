@@ -26,6 +26,10 @@ const SEED = [
     client: 'Acme', clientEmail: CLIENT, assignedTechEmail: TECH, status: 'Assigned',
     billingMigrated: true, invoiceSent: false, clientSignedOff: false,
   }],
+  ['jobs/job-ready', {
+    client: 'Acme', clientEmail: CLIENT, assignedTechEmail: TECH, status: 'Ready for Signoff',
+    billingMigrated: true, invoiceSent: false, clientSignedOff: false,
+  }],
   ['jobs/job-done', {
     client: 'Acme', clientEmail: CLIENT, assignedTechEmail: TECH, status: 'Completed',
     billingMigrated: true, invoiceSent: true, clientSignedOff: true,
@@ -176,9 +180,15 @@ describe('jobs', () => {
     await assertFails(updateDoc(doc(as.assistant(), 'jobs/job-open'), { status: 'Completed' }));
   });
 
-  it('owner client can sign off own job only', async () => {
-    await assertSucceeds(updateDoc(doc(as.client(), 'jobs/job-open'), { clientSignedOff: true }));
-    await assertFails(updateDoc(doc(as.otherClient(), 'jobs/job-open'), { clientSignedOff: true }));
+  it('owner client signs off a ready job only, without completing it', async () => {
+    await assertSucceeds(updateDoc(doc(as.client(), 'jobs/job-ready'), { clientSignedOff: true }));
+    await assertFails(updateDoc(doc(as.client(), 'jobs/job-open'), { clientSignedOff: true }));
+    await assertFails(updateDoc(doc(as.otherClient(), 'jobs/job-ready'), { clientSignedOff: true }));
+  });
+
+  it('owner client cannot set status to Completed', async () => {
+    await assertFails(updateDoc(doc(as.client(), 'jobs/job-ready'), { status: 'Completed', clientSignedOff: true }));
+    await assertFails(updateDoc(doc(as.client(), 'jobs/job-ready'), { status: 'Completed' }));
   });
 
   it('only admin deletes jobs', async () => {

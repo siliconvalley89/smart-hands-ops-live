@@ -152,9 +152,11 @@ service cloud.firestore {
             'breaks', 'beforePhotoUrl', 'afterPhotoUrl', 'beforePhotos', 'afterPhotos', 'attachments', 'signoffRequestedAt'
           ]) &&
           request.resource.data.status in ['Assigned', 'Dispatched', 'En Route', 'On Site', 'Ready for Signoff']) ||
-        // Clients can only set clientSignedOff on their own jobs; no other fields
+        // Clients can only sign off their own job once work is ready; admins mark it Completed
         (isVerifiedClient() && resource.data.clientEmail == request.auth.token.email &&
-          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['clientSignedOff', 'status', 'statusUpdatedByRole', 'completedAt']))
+          resource.data.status == 'Ready for Signoff' &&
+          request.resource.data.clientSignedOff == true &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['clientSignedOff']))
       );
       allow delete: if isAdmin();
 
