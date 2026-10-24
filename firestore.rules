@@ -5,11 +5,8 @@ service cloud.firestore {
       return request.auth != null;
     }
 
-    // Falls back to the users doc until every account has a role claim; remove the fallback after backfill.
     function getUserRole() {
-      return 'role' in request.auth.token
-        ? request.auth.token.role
-        : get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role;
+      return request.auth.token.role;
     }
 
     function isAdmin() {
