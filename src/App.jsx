@@ -27,6 +27,7 @@ import { getCheckoutBlockReason } from './lib/jobDisplay';
 import TechNameWithPhoto from './features/TechNameWithPhoto';
 import ActiveJobs from './features/ActiveJobs';
 import SchedulingBoard from './features/SchedulingBoard';
+import AssetHistory from './features/AssetHistory';
 import CompletedJobs from './features/CompletedJobs';
 import RequestForm from './features/RequestForm';
 import Accounts from './features/Accounts';
@@ -1390,6 +1391,8 @@ function App() {
         {canStaffManage && (
           <SchedulingBoard activeJobs={activeJobs} techs={techs} onMoveJob={moveJobOnBoard} />
         )}
+
+        {canStaffManage && <AssetHistory />}
 
         <ActiveJobs
           profile={profile}

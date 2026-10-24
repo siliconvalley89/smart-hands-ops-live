@@ -733,6 +733,38 @@ exports.syncRoleClaim = onDocumentWritten('users/{uid}', async (event) => {
 // ── Website form → Firestore job ──────────────────────────────────────────────
 // Called by your business website's contact/service form.
 // Replace the cors origin with your website's actual domain for tighter security.
+// Staff-only serial number lookup; returns just the fields asset history needs, including completed visits
+exports.lookupAssetHistory = onCall(async (request) => {
+  const role = request.auth?.token?.role;
+  if (!['admin', 'adminAssistant'].includes(role)) {
+    throw new HttpsError('permission-denied', 'Staff only.');
+  }
+  const serialNumber = String(request.data?.serialNumber || '').trim();
+  if (!serialNumber || serialNumber.length > 64) {
+    throw new HttpsError('invalid-argument', 'Enter a serial number.');
+  }
+
+  const snapshot = await admin.firestore().collection('jobs').where('serialNumber', '==', serialNumber).get();
+  const toIso = (value) => (value?.toDate ? value.toDate().toISOString() : null);
+  const visits = snapshot.docs.map((doc) => {
+    const job = doc.data();
+    return {
+      id: doc.id,
+      client: job.client || '',
+      location: job.location || '',
+      task: job.task || '',
+      details: job.details || '',
+      status: job.status || '',
+      assignedTechName: job.assignedTechName || '',
+      createdAt: toIso(job.createdAt),
+      scheduledFor: toIso(job.scheduledFor),
+      completedAt: toIso(job.completedAt),
+    };
+  }).sort((a, b) => (b.scheduledFor || b.createdAt || '').localeCompare(a.scheduledFor || a.createdAt || ''));
+
+  return { serialNumber, visits };
+});
+
 exports.createJobFromWebsite = onRequest({ cors: ['https://www.siliconvalleysmarthands.com'] }, async (req, res) => {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
