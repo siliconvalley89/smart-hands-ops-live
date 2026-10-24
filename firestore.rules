@@ -150,13 +150,16 @@ service cloud.firestore {
 
       allow update: if isSignedIn() && (
         isAdmin() ||
-        // Assistants can only assign/reassign technicians on open jobs
+        // Assistants can assign/reassign technicians and set times on open jobs; times only before work starts
         (isAdminAssistant() && resource.data.status != 'Completed' &&
           request.resource.data.status in ['Pending', 'Assigned', 'Dispatched', 'En Route', 'On Site'] &&
           request.resource.data.diff(resource.data).affectedKeys().hasOnly([
             'assignedTechName', 'assignedTechEmail', 'assignedTechDistanceMiles',
-            'assignedTechDistanceKm', 'status', 'statusUpdatedByRole', 'updatedAt'
-          ])) ||
+            'assignedTechDistanceKm', 'status', 'statusUpdatedByRole', 'updatedAt',
+            'scheduledFor', 'scheduledEnd'
+          ]) &&
+          (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['scheduledFor', 'scheduledEnd']) ||
+            resource.data.status in ['Pending', 'Assigned', 'Dispatched'])) ||
         (isVerifiedTech() &&
           resource.data.assignedTechEmail == request.auth.token.email &&
           jobHasNoEmbeddedBilling(resource.data) &&

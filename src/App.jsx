@@ -13,7 +13,7 @@ import {
   sendPasswordResetEmail,
 } from 'firebase/auth';
 import logoPath from './assets/sv-smart-dispatch-logo.jpg';
-import { isJobDispatched, isJobAssigned, formatSchedule, findTechConflict } from './lib/jobTime';
+import { isJobDispatched, isJobAssigned, isJobMovable, formatSchedule, findTechConflict, getJobWindow, JOB_WINDOW_MS } from './lib/jobTime';
 import { calculateDistanceMiles } from './lib/geo';
 import { MAX_ATTACHMENT_BYTES, ATTACHMENT_ACCEPT, PHOTO_MAX_DIMENSION, PHOTO_JPEG_QUALITY, downloadPhotoFile, fileToSquareDataUrl, compressPhotoForUpload } from './lib/media';
 import { prepareBadge, generateBadgePdf } from './lib/badge';
@@ -26,6 +26,7 @@ import useUsers from './hooks/useUsers';
 import { getCheckoutBlockReason } from './lib/jobDisplay';
 import TechNameWithPhoto from './features/TechNameWithPhoto';
 import ActiveJobs from './features/ActiveJobs';
+import SchedulingBoard from './features/SchedulingBoard';
 import CompletedJobs from './features/CompletedJobs';
 import RequestForm from './features/RequestForm';
 import Accounts from './features/Accounts';
@@ -905,6 +906,20 @@ function App() {
     }
   };
 
+  const buildAssignmentUpdates = (job, tech) => {
+    const distanceMiles = job.lat != null && job.lng != null && tech.lat != null && tech.lng != null
+      ? calculateDistanceMiles(job.lat, job.lng, tech.lat, tech.lng)
+      : null;
+    return {
+      assignedTechName: tech.name,
+      assignedTechEmail: tech.email,
+      assignedTechDistanceMiles: distanceMiles,
+      assignedTechDistanceKm: distanceMiles,
+      status: 'Assigned',
+      statusUpdatedByRole: profile.role,
+    };
+  };
+
   const assignTechnicianToJob = async (job) => {
     const techId = assignments[job.id];
     if (!techId) {
@@ -926,25 +941,52 @@ function App() {
     }
 
     try {
-      const jobRef = doc(db, 'jobs', job.id);
-      const distanceMiles = job.lat != null && job.lng != null && tech.lat != null && tech.lng != null
-        ? calculateDistanceMiles(job.lat, job.lng, tech.lat, tech.lng)
-        : null;
-
-      await updateDoc(jobRef, {
-        assignedTechName: tech.name,
-        assignedTechEmail: tech.email,
-        assignedTechDistanceMiles: distanceMiles,
-        assignedTechDistanceKm: distanceMiles,
-        status: 'Assigned',
-        statusUpdatedByRole: profile.role,
-      });
+      await updateDoc(doc(db, 'jobs', job.id), buildAssignmentUpdates(job, tech));
       // Cloud Function (manageTechStatusOnJobUpdated) marks techs busy only while en route / on site
 
       setAppError('');
     } catch (error) {
       console.error('Manual assignment failed', error);
       setAppError('Unable to assign technician.');
+    }
+  };
+
+  const moveJobOnBoard = async (job, { techEmail, startMs }) => {
+    if (!isJobMovable(job)) {
+      setAppError(`${job.status} jobs cannot be moved on the schedule.`);
+      return;
+    }
+    const tech = techs.find((item) => item.email === techEmail);
+    if (!tech) {
+      setAppError('Technician not found.');
+      return;
+    }
+
+    const currentWindow = getJobWindow(job);
+    const durationMs = currentWindow ? currentWindow.end - currentWindow.start : JOB_WINDOW_MS;
+    const endMs = startMs + durationMs;
+    const sameTech = job.assignedTechEmail === tech.email;
+    if (sameTech && currentWindow && currentWindow.start === startMs) return;
+
+    const conflict = findTechConflict({ ...job, scheduledFor: startMs, scheduledEnd: endMs }, tech.email, jobs);
+    if (conflict) {
+      const when = conflict.scheduledFor ? formatSchedule(conflict) : 'now';
+      const confirmed = await askConfirm(`${tech.name} is already assigned to another job (${conflict.client || conflict.task || 'job'}, ${when}) during this window. Move this job here anyway?`, 'Move anyway');
+      if (!confirmed) return;
+    }
+
+    try {
+      const updates = {
+        scheduledFor: new Date(startMs),
+        scheduledEnd: new Date(endMs),
+        updatedAt: new Date(),
+      };
+      if (!sameTech) Object.assign(updates, buildAssignmentUpdates(job, tech));
+      await updateDoc(doc(db, 'jobs', job.id), updates);
+      setAppError('');
+    } catch (error) {
+      console.error('Schedule move failed', error);
+      setAppError('Unable to move this job.');
     }
   };
 
@@ -1343,6 +1385,10 @@ function App() {
             recordedBy={firebaseUser?.email || ''}
             setAppError={setAppError}
           />
+        )}
+
+        {canStaffManage && (
+          <SchedulingBoard activeJobs={activeJobs} techs={techs} onMoveJob={moveJobOnBoard} />
         )}
 
         <ActiveJobs

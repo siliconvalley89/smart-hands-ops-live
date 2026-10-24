@@ -38,6 +38,10 @@ const SEED = [
     client: 'Acme', clientEmail: CLIENT, assignedTechEmail: TECH, status: 'Assigned',
     billingMigrated: true, invoiceSent: true, clientSignedOff: false,
   }],
+  ['jobs/job-onsite', {
+    client: 'Acme', clientEmail: CLIENT, assignedTechEmail: TECH, status: 'On Site',
+    billingMigrated: true, invoiceSent: false, clientSignedOff: false,
+  }],
   ['jobs/job-open/consumables/c1', { description: 'Cable', qty: 1 }],
   ['jobs/job-done/consumables/c2', { description: 'Clamp', qty: 2 }],
   ['jobs/job-open/photos/ph-seed', { type: 'before', url: 'https://x/seed.jpg', path: 'jobs/job-open/seed.jpg', uploadedAt: new Date(), uploadedBy: TECH }],
@@ -197,6 +201,34 @@ describe('jobs', () => {
   it('only admin deletes jobs', async () => {
     await assertFails(deleteDoc(doc(as.assistant(), 'jobs/job-open')));
     await assertSucceeds(deleteDoc(doc(as.admin(), 'jobs/job-open')));
+  });
+});
+
+describe('scheduling', () => {
+  const start = new Date('2026-11-02T17:00:00Z');
+  const end = new Date('2026-11-02T19:00:00Z');
+
+  it('assistant sets a time on an open job', async () => {
+    await assertSucceeds(updateDoc(doc(as.assistant(), 'jobs/job-open'), { scheduledFor: start, scheduledEnd: end, updatedAt: new Date() }));
+  });
+
+  it('assistant reassigns and reschedules an open job in one write', async () => {
+    await assertSucceeds(updateDoc(doc(as.assistant(), 'jobs/job-open'), {
+      assignedTechName: 'Sam', assignedTechEmail: SENIOR, assignedTechDistanceMiles: null, assignedTechDistanceKm: null,
+      status: 'Assigned', statusUpdatedByRole: 'adminAssistant', scheduledFor: start, scheduledEnd: end, updatedAt: new Date(),
+    }));
+  });
+
+  it('assistant cannot set a time on a completed job', async () => {
+    await assertFails(updateDoc(doc(as.assistant(), 'jobs/job-done'), { scheduledFor: start, scheduledEnd: end }));
+  });
+
+  it('assistant cannot change the time of a job that is already on site', async () => {
+    await assertFails(updateDoc(doc(as.assistant(), 'jobs/job-onsite'), { scheduledFor: start, scheduledEnd: end }));
+  });
+
+  it('admin sets a time on any job', async () => {
+    await assertSucceeds(updateDoc(doc(as.admin(), 'jobs/job-onsite'), { scheduledFor: start, scheduledEnd: end }));
   });
 });
 

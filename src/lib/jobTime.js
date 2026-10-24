@@ -46,6 +46,32 @@ export const formatSchedule = (job) => {
   return `${datePart} ${hhmm(s)}-${endDatePart}${hhmm(e)}`;
 };
 
+export const BOARD_START_MINUTE = 6 * 60;
+export const BOARD_END_MINUTE = 22 * 60;
+export const MOVABLE_STATUSES = ['Pending', 'Assigned', 'Dispatched'];
+export const isJobMovable = (job) => MOVABLE_STATUSES.includes(job.status);
+
+export const getWeekDays = (anchor) => {
+  const d = new Date(anchor);
+  const offset = (d.getDay() + 6) % 7;
+  return Array.from({ length: 7 }, (_, i) => new Date(d.getFullYear(), d.getMonth(), d.getDate() - offset + i));
+};
+
+export const minuteOfDayToMs = (day, minute) =>
+  new Date(day.getFullYear(), day.getMonth(), day.getDate(), 0, minute).getTime();
+
+export const snapMinute = (minute, step = 30) => Math.round(minute / step) * step;
+
+// Returns the part of a window that falls on one day within the board's visible hours, as pixel-ready minutes
+export const getDayPlacement = (window, day) => {
+  const boardStart = minuteOfDayToMs(day, BOARD_START_MINUTE);
+  const boardEnd = minuteOfDayToMs(day, BOARD_END_MINUTE);
+  const start = Math.max(window.start, boardStart);
+  const end = Math.min(window.end, boardEnd);
+  if (end <= start) return null;
+  return { top: (start - boardStart) / 60000, height: (end - start) / 60000 };
+};
+
 export const findTechConflict = (targetJob, techEmail, allJobs) => {
   if (!techEmail) return null;
   const now = Date.now();

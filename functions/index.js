@@ -138,6 +138,33 @@ exports.notifyTechOnJobAssigned = onDocumentUpdated('jobs/{jobId}', async (event
   return null;
 });
 
+// Fires when a job's start time changes for the tech already on it; reassignment is covered by notifyTechOnJobAssigned
+exports.notifyTechOnJobRescheduled = onDocumentUpdated('jobs/{jobId}', async (event) => {
+  const before = event.data.before.data();
+  const after = event.data.after.data();
+
+  if (!after.assignedTechEmail || before.assignedTechEmail !== after.assignedTechEmail) return null;
+  const newStart = toMillisValue(after.scheduledFor);
+  if (newStart == null || toMillisValue(before.scheduledFor) === newStart) return null;
+
+  const when = new Date(newStart).toLocaleString('en-US', {
+    timeZone: 'America/Los_Angeles',
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+  const targets = await getPushTargets(
+    admin.firestore().collection('users').where('email', '==', after.assignedTechEmail).limit(1)
+  );
+  await sendJobPush(targets, event.params.jobId, {
+    title: `Rescheduled: ${after.task || 'Job'}`,
+    body: `New time: ${when} at ${after.location || 'site'}`,
+    tag: `reschedule-${event.params.jobId}`,
+  });
+  return null;
+});
 const STAFF_ROLES = ['admin', 'adminAssistant', 'seniorConsultant'];
 
 const INVALID_TOKEN_CODES = new Set([
