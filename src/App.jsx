@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { db, storage, auth, messaging, VAPID_KEY } from './firebase';
-import { collection, onSnapshot, addDoc, query, orderBy, deleteDoc, doc, updateDoc, getDocs, getDoc, setDoc, where, limit, getCountFromServer, writeBatch } from 'firebase/firestore';
+import { collection, onSnapshot, addDoc, query, orderBy, deleteDoc, doc, updateDoc, getDocs, getDoc, setDoc, where, limit, getCountFromServer, writeBatch, arrayUnion, deleteField } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { getToken } from 'firebase/messaging';
 import {
@@ -247,13 +247,17 @@ function App() {
     const registerFcmToken = async () => {
       try {
         const permission = await Notification.requestPermission();
+        if (permission === 'denied') {
+          setAppError('Notifications are blocked for this browser. Allow them in site settings to get job alerts on this device.');
+        }
         if (permission !== 'granted') return;
         const token = await getToken(messaging, { vapidKey: VAPID_KEY });
         if (!token) return;
         const userRef = doc(db, 'users', firebaseUser.uid);
-        await updateDoc(userRef, { fcmToken: token });
+        await updateDoc(userRef, { fcmTokens: arrayUnion(token), fcmToken: deleteField() });
       } catch (err) {
         console.warn('FCM token registration failed:', err.message);
+        setAppError('Unable to turn on job notifications on this device.');
       }
     };
     registerFcmToken();

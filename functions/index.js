@@ -24,22 +24,11 @@ const emailjsPrivateKey = defineSecret('EMAILJS_PRIVATE_KEY');
 async function sendDispatchNotification(jobId, job) {
   if (!job.assignedTechEmail) return;
 
-  const usersSnapshot = await admin
-    .firestore()
-    .collection('users')
-    .where('email', '==', job.assignedTechEmail)
-    .limit(1)
-    .get();
+  const targets = await getPushTargets(
+    admin.firestore().collection('users').where('email', '==', job.assignedTechEmail).limit(1)
+  );
 
-  if (usersSnapshot.empty) {
-    console.log(`User doc not found for tech email: ${job.assignedTechEmail}`);
-    return;
-  }
-
-  const tech = usersSnapshot.docs[0].data();
-  const fcmToken = tech.fcmToken;
-
-  if (!fcmToken) {
+  if (!targets.length) {
     console.log(`No FCM token stored for tech: ${job.assignedTechEmail}`);
     return;
   }
@@ -50,7 +39,6 @@ async function sendDispatchNotification(jobId, job) {
   const body = bodyParts.join('  |  ');
 
   const message = {
-    token: fcmToken,
     notification: { title, body },
     // data fields are all strings — available even when app is in background
     data: {
@@ -74,8 +62,9 @@ async function sendDispatchNotification(jobId, job) {
   };
 
   try {
-    const result = await admin.messaging().send(message);
-    console.log('FCM dispatch notification sent:', result);
+    const response = await admin.messaging().sendEachForMulticast({ ...message, tokens: targets.map((t) => t.token) });
+    await pruneInvalidTokens(targets, response.responses);
+    console.log('FCM dispatch notification sent to', response.successCount, 'device(s)');
   } catch (err) {
     console.error('FCM send failed:', err.code, err.message);
   }
@@ -150,15 +139,45 @@ exports.notifyTechOnJobAssigned = onDocumentUpdated('jobs/{jobId}', async (event
 
 const STAFF_ROLES = ['admin', 'adminAssistant', 'seniorConsultant'];
 
-async function getFcmTokens(query) {
+const INVALID_TOKEN_CODES = new Set([
+  'messaging/invalid-registration-token',
+  'messaging/registration-token-not-registered',
+]);
+
+async function getPushTargets(query) {
   const snapshot = await query.get();
-  return [...new Set(snapshot.docs.map((d) => d.data().fcmToken).filter(Boolean))];
+  const seen = new Set();
+  const targets = [];
+  for (const doc of snapshot.docs) {
+    const data = doc.data();
+    const entries = [
+      ...(data.fcmTokens || []).map((token) => ({ token, field: 'fcmTokens' })),
+      ...(data.fcmToken ? [{ token: data.fcmToken, field: 'fcmToken' }] : []),
+    ];
+    for (const entry of entries) {
+      if (seen.has(entry.token)) continue;
+      seen.add(entry.token);
+      targets.push({ ref: doc.ref, ...entry });
+    }
+  }
+  return targets;
 }
 
-async function sendJobPush(tokens, jobId, { title, body, tag }) {
-  if (!tokens.length) return;
+async function pruneInvalidTokens(targets, responses) {
+  await Promise.all(responses.map((response, index) => {
+    if (response.success || !INVALID_TOKEN_CODES.has(response.error?.code)) return null;
+    const { ref, token, field } = targets[index];
+    const update = field === 'fcmTokens'
+      ? { fcmTokens: admin.firestore.FieldValue.arrayRemove(token) }
+      : { fcmToken: admin.firestore.FieldValue.delete() };
+    return ref.update(update);
+  }));
+}
+
+async function sendJobPush(targets, jobId, { title, body, tag }) {
+  if (!targets.length) return;
   const response = await admin.messaging().sendEachForMulticast({
-    tokens,
+    tokens: targets.map((t) => t.token),
     notification: { title, body },
     data: { jobId: String(jobId) },
     webpush: {
@@ -169,11 +188,12 @@ async function sendJobPush(tokens, jobId, { title, body, tag }) {
   response.responses.forEach((r) => {
     if (!r.success) console.error('FCM send failed:', r.error?.code, r.error?.message);
   });
+  await pruneInvalidTokens(targets, response.responses);
 }
 
 async function notifyAdmins(jobId, alert) {
-  const tokens = await getFcmTokens(admin.firestore().collection('users').where('role', '==', 'admin'));
-  await sendJobPush(tokens, jobId, alert);
+  const targets = await getPushTargets(admin.firestore().collection('users').where('role', '==', 'admin'));
+  await sendJobPush(targets, jobId, alert);
 }
 
 function photoCount(job) {
@@ -239,10 +259,10 @@ exports.notifyTechOnStaffStatusChange = onDocumentUpdated('jobs/{jobId}', async 
   if (before.assignedTechEmail !== after.assignedTechEmail) return null;
   if (!after.assignedTechEmail || !STAFF_ROLES.includes(after.statusUpdatedByRole)) return null;
 
-  const tokens = await getFcmTokens(
+  const targets = await getPushTargets(
     admin.firestore().collection('users').where('email', '==', after.assignedTechEmail).limit(1)
   );
-  await sendJobPush(tokens, event.params.jobId, {
+  await sendJobPush(targets, event.params.jobId, {
     title: `Job update: ${after.status}`,
     body: `${after.task || 'Your job'} at ${after.location || 'site'} is now ${after.status}`,
     tag: `status-${event.params.jobId}`,

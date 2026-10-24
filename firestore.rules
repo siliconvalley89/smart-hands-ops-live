@@ -72,10 +72,10 @@ service cloud.firestore {
           request.resource.data.role in ['tech', 'client']
         )
       );
-      // Admins can do full updates; users can update only their own fcmToken, mustChangePassword and profilePhotoUrl fields
+      // Admins can do full updates; users can update only their own push tokens, mustChangePassword and profile photo fields
       allow update: if isAdmin() ||
         (isSignedIn() && request.auth.uid == userId &&
-         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['fcmToken', 'mustChangePassword', 'profilePhotoUrl', 'profilePhotoData']));
+         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['fcmToken', 'fcmTokens', 'mustChangePassword', 'profilePhotoUrl', 'profilePhotoData']));
       allow delete: if isAdmin();
     }
 
