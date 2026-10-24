@@ -178,6 +178,35 @@ service cloud.firestore {
           request.resource.data.qty >= 1;
         allow delete: if canManageJobConsumables(jobId);
       }
+
+      match /payments/{paymentId} {
+        allow read: if isAdmin() || (
+          isVerifiedClient() &&
+          get(/databases/$(database)/documents/jobs/$(jobId)).data.clientEmail == request.auth.token.email
+        );
+        allow create: if isAdmin() &&
+          request.resource.data.keys().hasOnly(['amount', 'method', 'reference', 'receivedAt', 'recordedAt', 'recordedBy', 'voided']) &&
+          request.resource.data.keys().hasAll(['amount', 'method', 'receivedAt', 'recordedAt', 'recordedBy', 'voided']) &&
+          request.resource.data.amount is number &&
+          request.resource.data.amount > 0 &&
+          request.resource.data.method in ['check', 'ach', 'card', 'cash', 'other'] &&
+          request.resource.data.recordedBy == request.auth.token.email &&
+          request.resource.data.voided == false;
+        // Payments are append-only: admins may void a payment with a reason, never edit or delete it
+        allow update: if isAdmin() &&
+          resource.data.voided == false &&
+          request.resource.data.voided == true &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['voided', 'voidReason', 'voidedBy', 'voidedAt']);
+        allow delete: if false;
+      }
+    }
+
+    match /{path=**}/consumables/{itemId} {
+      allow read: if isAdmin();
+    }
+
+    match /{path=**}/payments/{paymentId} {
+      allow read: if isAdmin();
     }
 
     match /jobBilling/{jobId} {

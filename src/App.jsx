@@ -20,6 +20,8 @@ import { calculateDistanceMiles } from './lib/geo';
 import { MAX_ATTACHMENT_BYTES, ATTACHMENT_ACCEPT, PHOTO_MAX_DIMENSION, PHOTO_JPEG_QUALITY, downloadPhotoFile, formatFileSize, fileToSquareDataUrl, compressPhotoForUpload } from './lib/media';
 import { prepareBadge, generateBadgePdf } from './lib/badge';
 import { calcInvoiceTotal, generateInvoicePdf } from './lib/invoice';
+import { getReceivableStatus } from './lib/payments';
+import Receivables from './features/Receivables';
 import { BUSINESS_NAME, APP_DISPLAY_NAME } from './lib/branding';
 import {
   Briefcase,
@@ -156,6 +158,7 @@ function App() {
   };
   const [jobs, setJobs] = useState([]);
   const [jobBilling, setJobBilling] = useState({});
+  const [jobPayments, setJobPayments] = useState({});
   const [jobConsumables, setJobConsumables] = useState({});
   const [techs, setTechs] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -182,6 +185,7 @@ function App() {
   const [completedLoading, setCompletedLoading] = useState(false);
   const [completedTotal, setCompletedTotal] = useState(0);
   const [showJobsPanel, setShowJobsPanel] = useState(false);
+  const [showReceivablesPanel, setShowReceivablesPanel] = useState(false);
   const [showCompletedJobsPanel, setShowCompletedJobsPanel] = useState(false);
   const [jobSearch, setJobSearch] = useState('');
   const [jobStatusFilter, setJobStatusFilter] = useState('All');
@@ -370,6 +374,7 @@ function App() {
     const jobIds = observedJobIdsKey ? observedJobIdsKey.split('|') : [];
     const subscriptions = [];
     setJobBilling({});
+    setJobPayments({});
     setJobConsumables({});
 
     jobIds.forEach((jobId) => {
@@ -404,6 +409,19 @@ function App() {
           (error) => {
             console.error(`Unable to load billing data for job ${jobId}`, error);
             if (!suppressAuthStateRef.current) setAppError('Unable to load job billing data.');
+          },
+        ));
+
+        subscriptions.push(onSnapshot(
+          collection(db, 'jobs', jobId, 'payments'),
+          (snapshot) => {
+            setJobPayments((prev) => ({
+              ...prev,
+              [jobId]: snapshot.docs.map((paymentDoc) => ({ ...paymentDoc.data(), id: paymentDoc.id })),
+            }));
+          },
+          (error) => {
+            console.error(`Unable to load payments for job ${jobId}`, error);
           },
         ));
       }
@@ -1959,10 +1977,30 @@ function App() {
           </>
         )}
 
+        {isAdmin && (
+          <section className="grid gap-4">
+            <div className="flex items-center justify-between rounded-3xl bg-slate-800 border border-slate-700 p-4">
+              <div>
+                <h2 className="text-xl font-semibold text-white">Receivables</h2>
+                <p className="text-slate-400 text-sm mt-1">Invoices awaiting payment, aging, and manual payment recording.</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowReceivablesPanel((prev) => !prev)}
+                className="rounded-2xl border border-slate-600 px-4 py-2 text-sm text-slate-200 hover:bg-slate-800 transition"
+              >
+                {showReceivablesPanel ? 'Collapse' : 'Expand'}
+              </button>
+            </div>
+            {showReceivablesPanel && <Receivables recordedBy={firebaseUser?.email || ''} setAppError={setAppError} />}
+          </section>
+        )}
+
         <section className="grid gap-4">
           <div className="flex items-center justify-between rounded-3xl bg-slate-800 border border-slate-700 p-4">
             <div>
               <h2 className="text-xl font-semibold text-white">Active jobs</h2>
+
               <p className="text-slate-400 text-sm mt-1">Jobs currently in progress or awaiting dispatch.</p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
@@ -2010,6 +2048,7 @@ function App() {
             <div className="space-y-6">
               {filteredActiveJobs.map((job) => {
                 const total = calcInvoiceTotal(job.consumables || [], job.serviceFee);
+                const receivable = getReceivableStatus(job, jobPayments[job.id] || []);
                 const beforeReady = getJobPhotos(job, 'before').length > 0;
                 const afterReady = getJobPhotos(job, 'after').length > 0;
                 const canRequestSignoff = isFieldRole(profile.role) && ['Assigned', 'Dispatched', 'En Route', 'On Site'].includes(job.status) && beforeReady && afterReady && Boolean(job.checkInAt);
@@ -2358,6 +2397,18 @@ function App() {
                               <span>Total</span>
                               <span className="font-semibold text-slate-100">${total.toFixed(2)}</span>
                             </div>
+                            {job.invoiceSent && (
+                              <>
+                                <div className="flex items-center justify-between text-slate-400 text-sm mb-2">
+                                  <span>Paid</span>
+                                  <span className="font-semibold text-slate-100">${receivable.paid.toFixed(2)}</span>
+                                </div>
+                                <div className="flex items-center justify-between text-sm mb-2">
+                                  <span className="text-slate-400">Balance due</span>
+                                  <span className={`font-semibold ${receivable.balance > 0 ? 'text-amber-300' : 'text-teal-300'}`}>${receivable.balance.toFixed(2)} · {receivable.status}</span>
+                                </div>
+                              </>
+                            )}
                             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-end">
                               {job.status !== 'Pending' && (
                                 profile.role === 'admin' || job.adminSignedOff ? (
@@ -2626,6 +2677,21 @@ function App() {
                             <span>Total</span>
                             <span className="font-semibold text-slate-100">${calcInvoiceTotal(job.consumables || [], job.serviceFee).toFixed(2)}</span>
                           </div>
+                          {job.invoiceSent && (() => {
+                            const receivable = getReceivableStatus(job, jobPayments[job.id] || []);
+                            return (
+                              <>
+                                <div className="flex items-center justify-between text-slate-400 text-sm mb-2">
+                                  <span>Paid</span>
+                                  <span className="font-semibold text-slate-100">${receivable.paid.toFixed(2)}</span>
+                                </div>
+                                <div className="flex items-center justify-between text-sm mb-2">
+                                  <span className="text-slate-400">Balance due</span>
+                                  <span className={`font-semibold ${receivable.balance > 0 ? 'text-amber-300' : 'text-teal-300'}`}>${receivable.balance.toFixed(2)} · {receivable.status}</span>
+                                </div>
+                              </>
+                            );
+                          })()}
                           {(profile.role === 'admin' || job.adminSignedOff) && (
                             <button onClick={() => generateInvoicePdf(job, setAppError)} className="mt-2 rounded-2xl bg-teal-600 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-500 transition">
                               Download invoice

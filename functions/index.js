@@ -1,5 +1,6 @@
 const { onDocumentCreated, onDocumentUpdated, onDocumentWritten } = require('firebase-functions/v2/firestore');
 const { onRequest } = require('firebase-functions/v2/https');
+const { onSchedule } = require('firebase-functions/v2/scheduler');
 const { defineSecret } = require('firebase-functions/params');
 const admin = require('firebase-admin');
 
@@ -80,6 +81,21 @@ async function sendDispatchNotification(jobId, job) {
   }
 }
 
+async function sendEmailJs(serviceId, templateId, publicKey, privateKey, templateParams) {
+  const response = await fetch('https://api.emailjs.com/api/v1.0/email/send', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      service_id:   serviceId,
+      template_id:  templateId,
+      user_id:      publicKey,
+      accessToken:  privateKey,
+      template_params: templateParams,
+    }),
+  });
+  if (!response.ok) throw new Error(`EmailJS ${response.status}: ${await response.text()}`);
+}
+
 // Sends a status-change email to the client via EmailJS REST API.
 // Only fires for the statuses that are meaningful to the client.
 async function sendClientStatusEmail(serviceId, templateId, publicKey, privateKey, jobId, job, newStatus) {
@@ -98,33 +114,19 @@ async function sendClientStatusEmail(serviceId, templateId, publicKey, privateKe
   if (!statusMessage) return;
 
   try {
-    const response = await fetch('https://api.emailjs.com/api/v1.0/email/send', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        service_id:   serviceId,
-        template_id:  templateId,
-        user_id:      publicKey,
-        accessToken:  privateKey,
-        template_params: {
-          to_email:       job.clientEmail,
-          to_name:        job.client || 'Valued Customer',
-          job_status:     newStatus,
-          job_task:       job.task || '',
-          job_location:   job.location || '',
-          tech_name:      job.assignedTechName || '',
-          status_message: statusMessage,
-          job_id:         jobId,
-        },
-      }),
+    await sendEmailJs(serviceId, templateId, publicKey, privateKey, {
+      to_email:       job.clientEmail,
+      to_name:        job.client || 'Valued Customer',
+      job_status:     newStatus,
+      job_task:       job.task || '',
+      job_location:   job.location || '',
+      tech_name:      job.assignedTechName || '',
+      status_message: statusMessage,
+      job_id:         jobId,
     });
-    if (!response.ok) {
-      console.error('EmailJS error:', response.status, await response.text());
-    } else {
-      console.log(`Status email sent to ${job.clientEmail} — status: ${newStatus}`);
-    }
+    console.log(`Status email sent to ${job.clientEmail} — status: ${newStatus}`);
   } catch (err) {
-    console.error('EmailJS fetch failed:', err.message);
+    console.error('EmailJS send failed:', err.message);
   }
 }
 
@@ -308,6 +310,118 @@ exports.manageTechStatusOnJobUpdated = onDocumentUpdated(
 
   return null;
 });
+
+// ── Receivables: client reminders on day 1, 7 and 14 past due, plus a daily admin digest ──
+const DAY_MS = 24 * 60 * 60 * 1000;
+const NET_TERMS_DAYS = 30;
+const REMINDER_STAGES = [
+  { afterDays: 1, message: 'Your invoice is past due. Please submit payment using the bank details on your invoice.' },
+  { afterDays: 7, message: 'Your invoice is now 7 days past due. Please submit payment as soon as possible.' },
+  { afterDays: 14, message: 'Final reminder: your invoice is 14 days past due. Please contact us today to arrange payment.' },
+];
+
+async function getInvoiceBalance(jobId) {
+  const db = admin.firestore();
+  const jobRef = db.collection('jobs').doc(jobId);
+  const [billingSnap, consumablesSnap, paymentsSnap] = await Promise.all([
+    db.collection('jobBilling').doc(jobId).get(),
+    jobRef.collection('consumables').get(),
+    jobRef.collection('payments').get(),
+  ]);
+  const billing = billingSnap.data() || {};
+  const prices = billing.consumablePrices || {};
+  const totalCents = Math.round(Number(billing.serviceFee || 0) * 100) + consumablesSnap.docs.reduce(
+    (sum, item) => sum + Math.round(Number(item.data().qty || 0) * Number(prices[item.id] || 0) * 100),
+    0,
+  );
+  const paidCents = paymentsSnap.docs
+    .map((item) => item.data())
+    .filter((payment) => !payment.voided)
+    .reduce((sum, payment) => sum + Math.round(Number(payment.amount || 0) * 100), 0);
+  return { billing, balance: Math.max(0, totalCents - paidCents) / 100 };
+}
+
+exports.sendPaymentReminders = onSchedule(
+  {
+    schedule: '15 9 * * *',
+    timeZone: 'America/Los_Angeles',
+    secrets: [emailjsServiceId, emailjsTemplateId, emailjsPublicKey, emailjsPrivateKey],
+  },
+  async () => {
+    const db = admin.firestore();
+    const now = Date.now();
+    const serviceId = emailjsServiceId.value().trim();
+    const templateId = emailjsTemplateId.value().trim();
+    const publicKey = emailjsPublicKey.value().trim();
+    const privateKey = emailjsPrivateKey.value().trim();
+
+    const cutoff = admin.firestore.Timestamp.fromMillis(now - NET_TERMS_DAYS * DAY_MS);
+    const signedOffSnap = await db.collection('jobs').where('adminSignedOffAt', '<', cutoff).get();
+
+    const overdue = [];
+    for (const jobDoc of signedOffSnap.docs) {
+      const job = jobDoc.data();
+      if (job.invoiceSent !== true) continue;
+
+      const { billing, balance } = await getInvoiceBalance(jobDoc.id);
+      if (balance <= 0) continue;
+
+      const dueMs = job.adminSignedOffAt.toMillis() + NET_TERMS_DAYS * DAY_MS;
+      const daysOverdue = Math.floor((now - dueMs) / DAY_MS);
+      overdue.push({ jobId: jobDoc.id, job, balance, daysOverdue });
+
+      const stageNumber = REMINDER_STAGES.findIndex((stage) => stage.afterDays === daysOverdue) + 1;
+      if (stageNumber === 0 || stageNumber <= (billing.paymentReminderStage || 0) || !job.clientEmail) continue;
+
+      try {
+        await sendEmailJs(serviceId, templateId, publicKey, privateKey, {
+          to_email:       job.clientEmail,
+          to_name:        job.client || 'Valued Customer',
+          job_status:     'Payment reminder',
+          job_task:       job.task || '',
+          job_location:   job.location || '',
+          tech_name:      '',
+          status_message: `${REMINDER_STAGES[stageNumber - 1].message} Balance due: $${balance.toFixed(2)}.`,
+          job_id:         jobDoc.id,
+        });
+        await db.collection('jobBilling').doc(jobDoc.id).set({
+          paymentReminderStage: stageNumber,
+          paymentRemindedAt: new Date(),
+        }, { merge: true });
+      } catch (err) {
+        console.error(`Payment reminder failed for job ${jobDoc.id}:`, err.message);
+      }
+    }
+
+    if (overdue.length === 0) return;
+
+    const total = overdue.reduce((sum, item) => sum + item.balance, 0);
+    const lines = overdue
+      .sort((a, b) => b.daysOverdue - a.daysOverdue)
+      .map((item) => `${item.job.client || 'Unnamed client'} (${item.jobId}): $${item.balance.toFixed(2)}, ${item.daysOverdue} day(s) overdue`);
+    const digestMessage = `${overdue.length} overdue invoice(s), $${total.toFixed(2)} total:\n${lines.join('\n')}`;
+
+    const adminsSnap = await db.collection('users').where('role', '==', 'admin').get();
+    for (const adminDoc of adminsSnap.docs) {
+      const adminEmail = adminDoc.data().email;
+      if (!adminEmail) continue;
+      try {
+        await sendEmailJs(serviceId, templateId, publicKey, privateKey, {
+          to_email:       adminEmail,
+          to_name:        adminDoc.data().displayName || 'Admin',
+          job_status:     'Receivables digest',
+          job_task:       '',
+          job_location:   '',
+          tech_name:      '',
+          status_message: digestMessage,
+          job_id:         '',
+        });
+      } catch (err) {
+        console.error(`Receivables digest failed for ${adminEmail}:`, err.message);
+      }
+    }
+  },
+);
 
 // Mirrors users/{uid}.role into the Auth token so security rules can read it without get() calls
 exports.syncRoleClaim = onDocumentWritten('users/{uid}', async (event) => {
