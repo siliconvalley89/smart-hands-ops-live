@@ -9,7 +9,6 @@ export default function useAuthProfile(setAppError) {
   const [authReady, setAuthReady] = useState(false);
   const [firebaseUser, setFirebaseUser] = useState(null);
   const [profile, setProfile] = useState(null);
-  const [adminSetupAllowed, setAdminSetupAllowed] = useState(false);
   const suppressAuthStateRef = useRef(false);
 
   useEffect(() => {
@@ -71,32 +70,12 @@ export default function useAuthProfile(setAppError) {
     registerFcmToken();
   }, [firebaseUser, profile, setAppError]);
 
-  useEffect(() => {
-    if (firebaseUser) {
-      setAdminSetupAllowed(false);
-      return;
-    }
-
-    const checkUsers = async () => {
-      try {
-        const snapshot = await getDocs(collection(db, 'users'));
-        setAdminSetupAllowed(snapshot.empty);
-      } catch (error) {
-        console.error('Unable to check users collection', error);
-        setAdminSetupAllowed(false);
-      }
-    };
-    checkUsers();
-  }, [firebaseUser]);
-
   return {
     authReady,
     firebaseUser,
     setFirebaseUser,
     profile,
     setProfile,
-    adminSetupAllowed,
-    setAdminSetupAllowed,
     suppressAuthStateRef,
   };
 }

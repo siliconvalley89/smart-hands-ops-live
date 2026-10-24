@@ -136,13 +136,11 @@ function LegalFooter() {
 }
 
 function App() {
-  const [initialAdminOpen, setInitialAdminOpen] = useState(false);
-  const [adminSetup, setAdminSetup] = useState({ name: '', email: '', password: '' });
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
   const [loginError, setLoginError] = useState('');
   const [appError, setAppError] = useState('');
-  const { authReady, firebaseUser, setFirebaseUser, profile, setProfile, adminSetupAllowed, setAdminSetupAllowed, suppressAuthStateRef } = useAuthProfile(setAppError);
+  const { authReady, firebaseUser, setFirebaseUser, profile, setProfile, suppressAuthStateRef } = useAuthProfile(setAppError);
   const [confirmDialog, setConfirmDialog] = useState(null);
   const askConfirm = (message, confirmLabel = 'Delete') => new Promise((resolve) => {
     setConfirmDialog({ message, confirmLabel, resolve });
@@ -423,50 +421,6 @@ function App() {
     }
   };
 
-  const setupInitialAdmin = async () => {
-    setLoginError('');
-    if (!adminSetup.name || !adminSetup.email || !adminSetup.password) {
-      setLoginError('Please fill all admin fields.');
-      return;
-    }
-    try {
-      const result = await createUserWithEmailAndPassword(auth, adminSetup.email.trim(), adminSetup.password.trim());
-      const user = result.user;
-      await setDoc(doc(db, 'users', user.uid), {
-        uid: user.uid,
-        displayName: adminSetup.name,
-        email: adminSetup.email.trim(),
-        role: 'admin',
-      });
-      setAdminSetup({ name: '', email: '', password: '' });
-      setAdminSetupAllowed(false);
-      setInitialAdminOpen(false);
-    } catch (error) {
-      console.error('Admin setup failed', error);
-      let message = 'Could not create admin account.';
-      if (error?.code) {
-        switch (error.code) {
-          case 'auth/email-already-in-use':
-            message = 'This email is already in use.';
-            break;
-          case 'auth/invalid-email':
-            message = 'Invalid email address.';
-            break;
-          case 'auth/weak-password':
-            message = 'Password too weak. Use at least 6 characters.';
-            break;
-          case 'auth/operation-not-allowed':
-            message = 'Email/password sign-in is disabled in Firebase Auth. Enable it in the Firebase console.';
-            break;
-          default:
-            message = error.message || message;
-        }
-      } else if (error?.message) {
-        message = error.message;
-      }
-      setLoginError(message);
-    }
-  };
 
   const logout = async () => {
     setShowAddUserPanel(false);
@@ -1357,40 +1311,6 @@ function App() {
                   ? <div className="rounded-2xl bg-emerald-900/50 p-3 text-emerald-200 text-sm">Reset link sent — check your inbox.</div>
                   : <button onClick={sendReset} className="w-full rounded-2xl bg-teal-600 px-4 py-2 text-white text-sm font-semibold hover:bg-teal-500 transition">Send reset link</button>
                 }
-              </div>
-            )}
-            {adminSetupAllowed && !initialAdminOpen && (
-              <button onClick={() => setInitialAdminOpen(true)} className="w-full rounded-2xl border border-slate-700 px-4 py-3 text-slate-200 hover:bg-slate-800 transition">
-                Create initial admin account
-              </button>
-            )}
-            {initialAdminOpen && (
-              <div className="space-y-4">
-                <label className="block text-slate-300 text-sm">Name</label>
-                <input
-                  value={adminSetup.name}
-                  onChange={(e) => setAdminSetup((prev) => ({ ...prev, name: e.target.value }))}
-                  placeholder="Admin Name"
-                  className="w-full rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3 text-slate-100 outline-none"
-                />
-                <label className="block text-slate-300 text-sm">Email</label>
-                <input
-                  value={adminSetup.email}
-                  onChange={(e) => setAdminSetup((prev) => ({ ...prev, email: e.target.value }))}
-                  placeholder="admin@example.com"
-                  className="w-full rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3 text-slate-100 outline-none"
-                />
-                <label className="block text-slate-300 text-sm">Password</label>
-                <input
-                  type="password"
-                  value={adminSetup.password}
-                  onChange={(e) => setAdminSetup((prev) => ({ ...prev, password: e.target.value }))}
-                  placeholder="Create password"
-                  className="w-full rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3 text-slate-100 outline-none"
-                />
-                <button onClick={setupInitialAdmin} className="w-full rounded-2xl bg-emerald-600 px-4 py-3 text-white font-semibold hover:bg-emerald-500 transition">
-                  Create admin account
-                </button>
               </div>
             )}
           </div>
