@@ -1,13 +1,11 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { db, storage, auth, messaging, VAPID_KEY } from './firebase';
-import { collection, onSnapshot, addDoc, query, orderBy, deleteDoc, doc, updateDoc, getDocs, getDoc, setDoc, where, limit, getCountFromServer, writeBatch, arrayUnion, deleteField } from 'firebase/firestore';
+import React, { useState, useEffect } from 'react';
+import { db, storage, auth } from './firebase';
+import { collection, onSnapshot, addDoc, query, orderBy, deleteDoc, doc, updateDoc, getDoc, setDoc, where, limit, getCountFromServer, writeBatch } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-import { getToken } from 'firebase/messaging';
 import {
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
   signOut as firebaseSignOut,
-  onAuthStateChanged,
   sendEmailVerification,
   EmailAuthProvider,
   reauthenticateWithCredential,
@@ -22,6 +20,8 @@ import { prepareBadge, generateBadgePdf } from './lib/badge';
 import { calcInvoiceTotal, generateInvoicePdf } from './lib/invoice';
 import { getReceivableStatus } from './lib/payments';
 import Receivables from './features/Receivables';
+import useAuthProfile from './hooks/useAuthProfile';
+import { isFieldRole } from './lib/roles';
 import { BUSINESS_NAME, APP_DISPLAY_NAME } from './lib/branding';
 import {
   Briefcase,
@@ -49,8 +49,6 @@ const formatDate = (value) => {
 };
 
 // Returns all photo URLs for a job, including the legacy single-photo field.
-const isFieldRole = (role) => role === 'tech' || role === 'seniorConsultant';
-
 const getJobPhotos = (job, type) => {
   const list = Array.isArray(job?.[`${type}Photos`]) ? job[`${type}Photos`] : [];
   const legacy = job?.[`${type}PhotoUrl`];
@@ -138,16 +136,13 @@ function LegalFooter() {
 }
 
 function App() {
-  const [authReady, setAuthReady] = useState(false);
-  const [firebaseUser, setFirebaseUser] = useState(null);
-  const [profile, setProfile] = useState(null);
   const [initialAdminOpen, setInitialAdminOpen] = useState(false);
-  const [adminSetupAllowed, setAdminSetupAllowed] = useState(false);
   const [adminSetup, setAdminSetup] = useState({ name: '', email: '', password: '' });
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
   const [loginError, setLoginError] = useState('');
   const [appError, setAppError] = useState('');
+  const { authReady, firebaseUser, setFirebaseUser, profile, setProfile, adminSetupAllowed, setAdminSetupAllowed, suppressAuthStateRef } = useAuthProfile(setAppError);
   const [confirmDialog, setConfirmDialog] = useState(null);
   const askConfirm = (message, confirmLabel = 'Delete') => new Promise((resolve) => {
     setConfirmDialog({ message, confirmLabel, resolve });
@@ -203,84 +198,6 @@ function App() {
   const [editingJobId, setEditingJobId] = useState(null);
   const [jobEdits, setJobEdits] = useState({});
   const [verifyMessage, setVerifyMessage] = useState('');
-  const suppressAuthStateRef = useRef(false);
-
-  useEffect(() => {
-    const authUnsub = onAuthStateChanged(auth, async (user) => {
-      if (suppressAuthStateRef.current) return;
-      try {
-        if (user) setAuthReady(false);
-        setFirebaseUser(user);
-        if (user) {
-          const userRef = doc(db, 'users', user.uid);
-          const userSnapshot = await getDoc(userRef);
-          if (userSnapshot.exists()) {
-            setProfile({ id: userSnapshot.id, ...userSnapshot.data() });
-          } else {
-            const usersQuery = query(collection(db, 'users'), where('uid', '==', user.uid));
-            const querySnapshot = await getDocs(usersQuery);
-            if (!querySnapshot.empty) {
-              setProfile({ id: querySnapshot.docs[0].id, ...querySnapshot.docs[0].data() });
-            } else {
-              setProfile(null);
-            }
-          }
-        } else {
-          setProfile(null);
-        }
-      } catch (error) {
-        console.error('Auth state load failed', error);
-        setAppError('Unable to load account data.');
-      } finally {
-        setAuthReady(true);
-      }
-    });
-
-    return () => authUnsub();
-  }, []);
-
-  // Register this device's FCM push token whenever a tech or admin logs in
-  useEffect(() => {
-    if (!firebaseUser || !profile) return;
-    if (!isFieldRole(profile.role) && profile.role !== 'admin') return;
-    if (!VAPID_KEY || VAPID_KEY === 'PASTE_YOUR_VAPID_KEY_HERE') return;
-
-    const registerFcmToken = async () => {
-      try {
-        const permission = await Notification.requestPermission();
-        if (permission === 'denied') {
-          setAppError('Notifications are blocked for this browser. Allow them in site settings to get job alerts on this device.');
-        }
-        if (permission !== 'granted') return;
-        const token = await getToken(messaging, { vapidKey: VAPID_KEY });
-        if (!token) return;
-        const userRef = doc(db, 'users', firebaseUser.uid);
-        await updateDoc(userRef, { fcmTokens: arrayUnion(token), fcmToken: deleteField() });
-      } catch (err) {
-        console.warn('FCM token registration failed:', err.message);
-        setAppError('Unable to turn on job notifications on this device.');
-      }
-    };
-    registerFcmToken();
-  }, [firebaseUser, profile]);
-
-  useEffect(() => {
-    if (firebaseUser) {
-      setAdminSetupAllowed(false);
-      return;
-    }
-
-    const checkUsers = async () => {
-      try {
-        const snapshot = await getDocs(collection(db, 'users'));
-        setAdminSetupAllowed(snapshot.empty);
-      } catch (error) {
-        console.error('Unable to check users collection', error);
-        setAdminSetupAllowed(false);
-      }
-    };
-    checkUsers();
-  }, [firebaseUser]);
 
   useEffect(() => {
     if (!profile?.role) {
@@ -433,7 +350,7 @@ function App() {
     });
 
     return () => subscriptions.forEach((unsubscribe) => unsubscribe());
-  }, [observedJobIdsKey, profile?.role, sessionRestoreCount]);
+  }, [observedJobIdsKey, profile?.role, sessionRestoreCount, suppressAuthStateRef]);
 
   useEffect(() => {
     const q = query(collection(db, 'technicians'), orderBy('name', 'asc'));
