@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { db, storage, auth } from './firebase';
+import { db, storage, auth, functions } from './firebase';
 import { collection, addDoc, deleteDoc, doc, updateDoc, getDoc, setDoc, writeBatch } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { httpsCallable } from 'firebase/functions';
 import {
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
@@ -23,7 +24,7 @@ import useAuthProfile from './hooks/useAuthProfile';
 import useJobs from './hooks/useJobs';
 import useTechs from './hooks/useTechs';
 import useUsers from './hooks/useUsers';
-import { getJobPhotos, getCheckoutBlockReason } from './lib/jobDisplay';
+import { getLegacyPhotoUrls, getCheckoutBlockReason } from './lib/jobDisplay';
 import TechNameWithPhoto from './features/TechNameWithPhoto';
 import ActiveJobs from './features/ActiveJobs';
 import CompletedJobs from './features/CompletedJobs';
@@ -291,8 +292,6 @@ function App() {
         createdByRole: profile.role,
         billingMigrated: true,
         invoiceSent: false,
-        beforePhotoUrl: '',
-        afterPhotoUrl: '',
         clientSignedOff: false,
         createdAt: new Date(),
       });
@@ -749,20 +748,19 @@ function App() {
         const safeName = upload.name.replace(/[^\w.-]/g, '_');
         const storageRef = ref(storage, `jobs/${jobId}/${type}-${Date.now()}-${i}-${safeName}`);
         await uploadBytes(storageRef, upload);
-        return getDownloadURL(storageRef);
+        return { url: await getDownloadURL(storageRef), path: storageRef.fullPath };
       }));
-      const urls = results.filter((r) => r.status === 'fulfilled').map((r) => r.value);
-      if (urls.length) {
-        // Re-read the latest job so concurrent uploads aren't overwritten
-        const snap = await getDoc(doc(db, 'jobs', jobId));
-        const current = snap.exists() ? snap.data() : job;
-        await updateDoc(doc(db, 'jobs', jobId), {
-          [`${type}Photos`]: [...getJobPhotos(current, type), ...urls],
-          [`${type}PhotoUrl`]: '',
-          updatedAt: new Date(),
-        });
+      const uploaded = results.filter((r) => r.status === 'fulfilled').map((r) => r.value);
+      if (uploaded.length) {
+        const batch = writeBatch(db);
+        for (const item of uploaded) {
+          batch.set(doc(collection(db, 'jobs', jobId, 'photos')), {
+            type, url: item.url, path: item.path, uploadedAt: new Date(), uploadedBy: firebaseUser.email,
+          });
+        }
+        await batch.commit();
       }
-      if (urls.length < files.length) setAppError(`${files.length - urls.length} photo(s) failed to upload.`);
+      if (uploaded.length < files.length) setAppError(`${files.length - uploaded.length} photo(s) failed to upload.`);
     } catch (error) {
       console.error('Photo upload failed', error);
       setAppError('Photo upload failed.');
@@ -785,16 +783,17 @@ function App() {
         const safeName = file.name.replace(/[^\w.-]/g, '_');
         const storageRef = ref(storage, `jobs/${job.id}/file-${Date.now()}-${i}-${safeName}`);
         await uploadBytes(storageRef, file);
-        return { name: file.name, url: await getDownloadURL(storageRef), size: file.size, type: file.type || '' };
+        return {
+          name: file.name, url: await getDownloadURL(storageRef), path: storageRef.fullPath, size: file.size, type: file.type || '',
+        };
       }));
       const uploaded = results.filter((r) => r.status === 'fulfilled').map((r) => r.value);
       if (uploaded.length) {
-        const snap = await getDoc(doc(db, 'jobs', job.id));
-        const current = snap.exists() ? snap.data() : job;
-        await updateDoc(doc(db, 'jobs', job.id), {
-          attachments: [...(current.attachments || []), ...uploaded],
-          updatedAt: new Date(),
-        });
+        const batch = writeBatch(db);
+        for (const item of uploaded) {
+          batch.set(doc(collection(db, 'jobs', job.id, 'files')), { ...item, uploadedAt: new Date(), uploadedBy: firebaseUser.email });
+        }
+        await batch.commit();
       }
       if (uploaded.length < valid.length) setAppError(`${valid.length - uploaded.length} file(s) failed to upload.`);
     } catch (error) {
@@ -808,12 +807,16 @@ function App() {
   const deleteAttachment = async (job, file) => {
     if (!(await askConfirm(`Delete "${file.name}"? This action cannot be undone.`))) return;
     try {
-      const snap = await getDoc(doc(db, 'jobs', job.id));
-      const current = snap.exists() ? snap.data() : job;
-      await updateDoc(doc(db, 'jobs', job.id), {
-        attachments: (current.attachments || []).filter((a) => a.url !== file.url),
-        updatedAt: new Date(),
-      });
+      if (file.legacy) {
+        const snap = await getDoc(doc(db, 'jobs', job.id));
+        const current = snap.exists() ? snap.data() : job;
+        await updateDoc(doc(db, 'jobs', job.id), {
+          attachments: (current.attachments || []).filter((a) => a.url !== file.url),
+          updatedAt: new Date(),
+        });
+      } else {
+        await deleteDoc(doc(db, 'jobs', job.id, 'files', file.id));
+      }
     } catch (error) {
       console.error('Delete file failed', error);
       setAppError('Unable to delete file.');
@@ -854,16 +857,20 @@ function App() {
     }
   };
 
-  const deletePhoto = async (job, type, url) => {
-    if (!(await askConfirm(`Are you sure you want to delete this ${type} photo? This action cannot be undone.`))) return;
+  const deletePhoto = async (job, photo) => {
+    if (!(await askConfirm(`Are you sure you want to delete this ${photo.type} photo? This action cannot be undone.`))) return;
     try {
-      const snap = await getDoc(doc(db, 'jobs', job.id));
-      const current = snap.exists() ? snap.data() : job;
-      await updateDoc(doc(db, 'jobs', job.id), {
-        [`${type}Photos`]: getJobPhotos(current, type).filter((u) => u !== url),
-        [`${type}PhotoUrl`]: '',
-        updatedAt: new Date(),
-      });
+      if (photo.legacy) {
+        const snap = await getDoc(doc(db, 'jobs', job.id));
+        const current = snap.exists() ? snap.data() : job;
+        await updateDoc(doc(db, 'jobs', job.id), {
+          [`${photo.type}Photos`]: getLegacyPhotoUrls(current, photo.type).filter((u) => u !== photo.url),
+          [`${photo.type}PhotoUrl`]: '',
+          updatedAt: new Date(),
+        });
+      } else {
+        await deleteDoc(doc(db, 'jobs', job.id, 'photos', photo.id));
+      }
     } catch (error) {
       console.error('Delete photo failed', error);
       setAppError('Unable to delete photo.');
@@ -890,6 +897,17 @@ function App() {
     } catch (error) {
       console.error('Save job edits failed', error);
       setAppError('Unable to save job edits.');
+    }
+  };
+
+  const runPhotoMigration = async () => {
+    if (!window.confirm('Copy legacy photos and files on every job into subcollections? Run once.')) return;
+    try {
+      const { data } = await httpsCallable(functions, 'migrateJobPhotos')();
+      window.alert(`Migration done: ${data.jobs} jobs, ${data.photos} photos, ${data.files} files.`);
+    } catch (error) {
+      console.error('Photo migration failed', error);
+      setAppError(error.message || 'Photo migration failed.');
     }
   };
 
@@ -1433,6 +1451,7 @@ function App() {
             downloadPhotos={downloadPhotos}
             setAppError={setAppError}
             adminSignOffWork={adminSignOffWork}
+            runPhotoMigration={runPhotoMigration}
             handleDelete={handleDelete}
           />
         )}

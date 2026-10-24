@@ -2,6 +2,7 @@ import { initializeApp } from "firebase/app";
 import { getFirestore } from "firebase/firestore";
 import { getStorage } from "firebase/storage";
 import { getAuth } from "firebase/auth";
+import { getFunctions } from "firebase/functions";
 import { getMessaging } from "firebase/messaging";
 
 // --- YOUR KEYS (Keep them exactly as they were) ---
@@ -22,6 +23,7 @@ const app = initializeApp(firebaseConfig);
 export const db = getFirestore(app);
 export const storage = getStorage(app);
 export const auth = getAuth(app);
+export const functions = getFunctions(app);
 
 // Firebase Cloud Messaging — used for push notifications to technicians.
 // REQUIRED: paste your Web Push VAPID key below.

@@ -1,36 +1,35 @@
 import { Camera, Trash2, Plus, Download } from 'lucide-react';
-import { getJobPhotos } from '../lib/jobDisplay';
 
-export default function JobPhotos({ job, profile, canDownloadPhotos, downloadPhotos, deletePhoto, handlePhotoUpload }) {
+export default function JobPhotos({ job, profile, photos, canDownloadPhotos, downloadPhotos, deletePhoto, handlePhotoUpload }) {
   return (
     <>
       {['before', 'after'].map((type) => {
-        const photos = getJobPhotos(job, type);
+        const items = photos[type];
         const label = type === 'before' ? 'Before' : 'After';
         return (
           <div key={type} className="rounded-2xl bg-slate-900 p-3 border border-slate-700">
             <div className="mb-2 flex items-center justify-between gap-2">
-              <div className="text-slate-300 text-sm">{label} photos {photos.length > 0 && `(${photos.length})`}</div>
-              {canDownloadPhotos && photos.length > 0 && (
-                <button type="button" onClick={() => downloadPhotos(photos)} className="inline-flex items-center gap-1 rounded-xl border border-slate-600 bg-slate-800 px-2 py-1 text-xs text-slate-200 hover:bg-slate-700 transition">
+              <div className="text-slate-300 text-sm">{label} photos {items.length > 0 && `(${items.length})`}</div>
+              {canDownloadPhotos && items.length > 0 && (
+                <button type="button" onClick={() => downloadPhotos(items.map((p) => p.url))} className="inline-flex items-center gap-1 rounded-xl border border-slate-600 bg-slate-800 px-2 py-1 text-xs text-slate-200 hover:bg-slate-700 transition">
                   <Download size={12} /> Download all
                 </button>
               )}
             </div>
-            {photos.length ? (
+            {items.length ? (
               <div className="grid grid-cols-2 gap-2">
-                {photos.map((url) => (
-                  <div key={url} className="relative">
-                    <a href={url} target="_blank" rel="noreferrer">
-                      <img src={url} alt={label} loading="lazy" decoding="async" className="w-full aspect-square rounded-xl object-cover" />
+                {items.map((photo) => (
+                  <div key={photo.id} className="relative">
+                    <a href={photo.url} target="_blank" rel="noreferrer">
+                      <img src={photo.url} alt={label} loading="lazy" decoding="async" className="w-full aspect-square rounded-xl object-cover" />
                     </a>
                     {['tech', 'admin'].includes(profile.role) && (
-                      <button type="button" aria-label={`Delete ${type} photo`} onClick={() => deletePhoto(job, type, url)} className="absolute top-1 right-1 rounded-full border border-red-800 bg-red-950/80 p-1.5 text-red-300 hover:bg-red-900 transition">
+                      <button type="button" aria-label={`Delete ${type} photo`} onClick={() => deletePhoto(job, photo)} className="absolute top-1 right-1 rounded-full border border-red-800 bg-red-950/80 p-1.5 text-red-300 hover:bg-red-900 transition">
                         <Trash2 size={13} />
                       </button>
                     )}
                     {canDownloadPhotos && (
-                      <button type="button" aria-label={`Download ${type} photo`} title="Download photo" onClick={() => downloadPhotos([url])} className="absolute bottom-1 left-1 rounded-full border border-slate-600 bg-slate-900/80 p-1.5 text-slate-200 hover:bg-slate-800 transition">
+                      <button type="button" aria-label={`Download ${type} photo`} title="Download photo" onClick={() => downloadPhotos([photo.url])} className="absolute bottom-1 left-1 rounded-full border border-slate-600 bg-slate-900/80 p-1.5 text-slate-200 hover:bg-slate-800 transition">
                         <Download size={13} />
                       </button>
                     )}

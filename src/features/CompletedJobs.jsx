@@ -1,6 +1,7 @@
-import { Download, Shield, Trash2 } from 'lucide-react';
+import { Shield, Trash2 } from 'lucide-react';
 import TechNameWithPhoto from './TechNameWithPhoto';
-import { formatDate, getJobPhotos } from '../lib/jobDisplay';
+import CompletedJobPhotos from './CompletedJobPhotos';
+import { formatDate, getPhotoCount } from '../lib/jobDisplay';
 import { calcInvoiceTotal, generateInvoicePdf } from '../lib/invoice';
 import { getReceivableStatus } from '../lib/payments';
 
@@ -24,6 +25,7 @@ export default function CompletedJobs({
   downloadPhotos,
   setAppError,
   adminSignOffWork,
+  runPhotoMigration,
   handleDelete,
 }) {
   return (
@@ -76,39 +78,8 @@ export default function CompletedJobs({
                       <div className="text-slate-200 text-sm">{formatDate(job.completedAt || job.createdAt)}</div>
                     </div>
                   </div>
-                  {(getJobPhotos(job, 'before').length > 0 || getJobPhotos(job, 'after').length > 0) && (
-                    <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-4">
-                      {['before', 'after'].map((type) => {
-                        const photos = getJobPhotos(job, type);
-                        if (!photos.length) return null;
-                        return (
-                          <div key={type} className="rounded-2xl bg-slate-900 p-3 border border-slate-700">
-                            <div className="mb-2 flex items-center justify-between gap-2">
-                              <div className="text-slate-300 text-sm">{type === 'before' ? 'Before' : 'After'} photos</div>
-                              {canDownloadPhotos && (
-                                <button type="button" onClick={() => downloadPhotos(photos)} className="inline-flex items-center gap-1 rounded-xl border border-slate-600 bg-slate-800 px-2 py-1 text-xs text-slate-200 hover:bg-slate-700 transition">
-                                  <Download size={12} /> Download all
-                                </button>
-                              )}
-                            </div>
-                            <div className="grid grid-cols-2 gap-2">
-                              {photos.map((url) => (
-                                <div key={url} className="relative">
-                                  <a href={url} target="_blank" rel="noreferrer">
-                                    <img src={url} alt={type} loading="lazy" decoding="async" className="w-full aspect-square rounded-xl object-cover" />
-                                  </a>
-                                  {canDownloadPhotos && (
-                                    <button type="button" aria-label={`Download ${type} photo`} title="Download photo" onClick={() => downloadPhotos([url])} className="absolute bottom-1 left-1 rounded-full border border-slate-600 bg-slate-900/80 p-1.5 text-slate-200 hover:bg-slate-800 transition">
-                                      <Download size={13} />
-                                    </button>
-                                  )}
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
+                  {getPhotoCount(job, 'before') + getPhotoCount(job, 'after') > 0 && (
+                    <CompletedJobPhotos job={job} canDownloadPhotos={canDownloadPhotos} downloadPhotos={downloadPhotos} />
                   )}
                   {canViewInvoice && (
                     <div className="mt-6 rounded-2xl bg-slate-900 p-4 border border-slate-700">
@@ -134,6 +105,11 @@ export default function CompletedJobs({
                       {(profile.role === 'admin' || job.adminSignedOff) && (
                         <button onClick={() => generateInvoicePdf(job, setAppError)} className="mt-2 rounded-2xl bg-teal-600 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-500 transition">
                           Download invoice
+                        </button>
+                      )}
+                      {profile.role === 'admin' && (
+                        <button onClick={runPhotoMigration} className="mt-2 ml-2 rounded-2xl border border-amber-500 px-4 py-2 text-sm font-semibold text-amber-300 hover:bg-amber-500/10 transition">
+                          Run photo migration
                         </button>
                       )}
                     </div>

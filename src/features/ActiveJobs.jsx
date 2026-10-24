@@ -1,14 +1,13 @@
 import { doc, updateDoc } from 'firebase/firestore';
 import { db } from '../firebase';
-import { Wrench, Clock, MapPin, Trash2, Camera, List, CheckCircle, Plus, FileText, Shield, Download } from 'lucide-react';
+import { Wrench, Clock, MapPin, Trash2, List, CheckCircle, Plus, FileText, Shield, Download } from 'lucide-react';
 import { formatSchedule, getJobStatusLabel } from '../lib/jobTime';
-import { ATTACHMENT_ACCEPT, formatFileSize } from '../lib/media';
 import { calcInvoiceTotal, generateInvoicePdf } from '../lib/invoice';
 import { getReceivableStatus } from '../lib/payments';
 import { isFieldRole } from '../lib/roles';
-import { formatDate, getJobPhotos, getCheckoutBlockReason } from '../lib/jobDisplay';
+import { formatDate, getPhotoCount, getCheckoutBlockReason } from '../lib/jobDisplay';
 import TechNameWithPhoto from './TechNameWithPhoto';
-import JobPhotos from './JobPhotos';
+import JobMedia from './JobMedia';
 
 export default function ActiveJobs({
   profile,
@@ -117,8 +116,8 @@ export default function ActiveJobs({
           {filteredActiveJobs.map((job) => {
             const total = calcInvoiceTotal(job.consumables || [], job.serviceFee);
             const receivable = getReceivableStatus(job, jobPayments[job.id] || []);
-            const beforeReady = getJobPhotos(job, 'before').length > 0;
-            const afterReady = getJobPhotos(job, 'after').length > 0;
+            const beforeReady = getPhotoCount(job, 'before') > 0;
+            const afterReady = getPhotoCount(job, 'after') > 0;
             const canRequestSignoff = isFieldRole(profile.role) && ['Assigned', 'Dispatched', 'En Route', 'On Site'].includes(job.status) && beforeReady && afterReady && Boolean(job.checkInAt);
             const canClientSignoff = profile.role === 'client' && job.status === 'Ready for Signoff' && !job.clientSignedOff;
 
@@ -206,44 +205,18 @@ export default function ActiveJobs({
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-6">
                   <div className="rounded-3xl bg-slate-950/40 border border-slate-700 p-4">
-                    <div className="flex items-center gap-2 text-sm text-slate-400 uppercase tracking-[0.18em] mb-4">
-                      <Camera size={16} /> Job photos
-                      {uploadingId === job.id && <span className="text-teal-300 normal-case tracking-normal">Uploading photo...</span>}
-                    </div>
-                    <div className="grid gap-3">
-                      <JobPhotos job={job} profile={profile} canDownloadPhotos={canDownloadPhotos} downloadPhotos={downloadPhotos} deletePhoto={deletePhoto} handlePhotoUpload={handlePhotoUpload} />
-                      <div className="rounded-2xl bg-slate-900 p-3 border border-slate-700">
-                        <div className="text-slate-300 text-sm mb-2 flex items-center gap-2">
-                          <FileText size={15} /> Files &amp; documents {(job.attachments || []).length > 0 && `(${job.attachments.length})`}
-                          {uploadingFilesId === job.id && <span className="text-teal-300 text-xs">Uploading...</span>}
-                        </div>
-                        {(job.attachments || []).length ? (
-                          <ul className="space-y-2">
-                            {job.attachments.map((file) => (
-                              <li key={file.url} className="flex items-center gap-2 rounded-xl border border-slate-700 bg-slate-800 px-3 py-2 text-sm">
-                                <a href={file.url} target="_blank" rel="noreferrer" download={file.name} className="flex-1 min-w-0 truncate text-teal-300 hover:underline">{file.name}</a>
-                                <span className="text-slate-500 text-xs shrink-0">{formatFileSize(file.size)}</span>
-                                {['tech', 'admin'].includes(profile.role) && (
-                                  <button type="button" aria-label={`Delete ${file.name}`} onClick={() => deleteAttachment(job, file)} className="text-red-300 hover:text-red-200">
-                                    <Trash2 size={14} />
-                                  </button>
-                                )}
-                              </li>
-                            ))}
-                          </ul>
-                        ) : (
-                          <div className="rounded-2xl border border-dashed border-slate-700 p-4 text-center text-slate-500 text-sm">No files yet</div>
-                        )}
-                        {['tech', 'admin'].includes(profile.role) && (
-                          <div className="mt-3">
-                            <label htmlFor={`attach-${job.id}`} className="cursor-pointer inline-flex items-center gap-2 rounded-2xl border border-slate-600 bg-slate-800 px-3 py-2 text-sm text-slate-200 hover:bg-slate-700 transition">
-                              <Plus size={15} /> Add files
-                            </label>
-                            <input id={`attach-${job.id}`} type="file" multiple className="hidden" accept={ATTACHMENT_ACCEPT} onChange={(e) => handleAttachmentUpload(e, job)} />
-                          </div>
-                        )}
-                      </div>
-                    </div>
+                    <JobMedia
+                      job={job}
+                      profile={profile}
+                      uploadingPhotos={uploadingId === job.id}
+                      uploadingFiles={uploadingFilesId === job.id}
+                      canDownloadPhotos={canDownloadPhotos}
+                      downloadPhotos={downloadPhotos}
+                      deletePhoto={deletePhoto}
+                      handlePhotoUpload={handlePhotoUpload}
+                      deleteAttachment={deleteAttachment}
+                      handleAttachmentUpload={handleAttachmentUpload}
+                    />
                   </div>
 
                   <div className="rounded-3xl bg-slate-950/40 border border-slate-700 p-4">

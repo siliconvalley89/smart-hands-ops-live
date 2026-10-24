@@ -40,6 +40,9 @@ const SEED = [
   }],
   ['jobs/job-open/consumables/c1', { description: 'Cable', qty: 1 }],
   ['jobs/job-done/consumables/c2', { description: 'Clamp', qty: 2 }],
+  ['jobs/job-open/photos/ph-seed', { type: 'before', url: 'https://x/seed.jpg', path: 'jobs/job-open/seed.jpg', uploadedAt: new Date(), uploadedBy: TECH }],
+  ['jobs/job-done/photos/ph-done', { type: 'after', url: 'https://x/done.jpg', path: 'jobs/job-done/done.jpg', uploadedAt: new Date(), uploadedBy: TECH }],
+  ['jobs/job-open/files/fi-seed', { name: 'manual.pdf', url: 'https://x/manual.pdf', size: 1000, type: 'application/pdf', path: 'jobs/job-open/manual.pdf', uploadedAt: new Date(), uploadedBy: TECH }],
   ['jobs/job-open/payments/p1', {
     amount: 250, method: 'check', reference: '#101', receivedAt: new Date(), recordedAt: new Date(),
     recordedBy: ADMIN, voided: false,
@@ -243,6 +246,66 @@ describe('consumables', () => {
   it('collection group read is admin only', async () => {
     await assertSucceeds(getDocs(collectionGroup(as.admin(), 'consumables')));
     await assertFails(getDocs(collectionGroup(as.assistant(), 'consumables')));
+  });
+});
+
+describe('job photos and files', () => {
+  const newPhoto = (overrides = {}) => ({
+    type: 'before', url: 'https://x/new.jpg', path: 'jobs/job-open/new.jpg', uploadedAt: new Date(), uploadedBy: TECH, ...overrides,
+  });
+  const newFile = (overrides = {}) => ({
+    name: 'spec.pdf', url: 'https://x/spec.pdf', path: 'jobs/job-open/spec.pdf', size: 2048, type: 'application/pdf',
+    uploadedAt: new Date(), uploadedBy: ADMIN, ...overrides,
+  });
+
+  it('assigned tech adds a photo on an open job', async () => {
+    await assertSucceeds(setDoc(doc(as.tech(), 'jobs/job-open/photos/ph-new'), newPhoto()));
+  });
+
+  it('tech cannot add photos to another tech job or to an invoiced job', async () => {
+    const otherTech = verified('other-tech', 'tech', 'other-tech@test.dev');
+    await assertFails(setDoc(doc(otherTech, 'jobs/job-open/photos/ph-x'), newPhoto({ uploadedBy: 'other-tech@test.dev' })));
+    await assertFails(setDoc(doc(as.tech(), 'jobs/job-invoiced/photos/ph-y'), newPhoto()));
+  });
+
+  it('client and unverified users cannot add photos or files', async () => {
+    await assertFails(setDoc(doc(as.client(), 'jobs/job-open/photos/ph-c'), newPhoto({ uploadedBy: CLIENT })));
+    await assertFails(setDoc(doc(as.client(), 'jobs/job-open/files/fi-c'), newFile({ uploadedBy: CLIENT })));
+    await assertFails(setDoc(doc(as.unverifiedTech(), 'jobs/job-open/photos/ph-u'), newPhoto()));
+  });
+
+  it('rejects unknown photo types and spoofed uploaders', async () => {
+    await assertFails(setDoc(doc(as.tech(), 'jobs/job-open/photos/ph-a'), newPhoto({ type: 'during' })));
+    await assertFails(setDoc(doc(as.tech(), 'jobs/job-open/photos/ph-b'), newPhoto({ uploadedBy: ADMIN })));
+    await assertFails(setDoc(doc(as.tech(), 'jobs/job-open/photos/ph-c'), newPhoto({ extra: true })));
+  });
+
+  it('photos and files are never edited after upload', async () => {
+    await assertFails(updateDoc(doc(as.tech(), 'jobs/job-open/photos/ph-seed'), { type: 'after' }));
+    await assertFails(updateDoc(doc(as.admin(), 'jobs/job-open/files/fi-seed'), { name: 'renamed.pdf' }));
+  });
+
+  it('tech and admin delete photos and files; client cannot', async () => {
+    await assertFails(deleteDoc(doc(as.client(), 'jobs/job-open/photos/ph-seed')));
+    await assertSucceeds(deleteDoc(doc(as.tech(), 'jobs/job-open/photos/ph-seed')));
+    await assertSucceeds(deleteDoc(doc(as.admin(), 'jobs/job-open/files/fi-seed')));
+  });
+
+  it('owner client and assistant read photos on open jobs; other clients read none', async () => {
+    await assertSucceeds(getDoc(doc(as.client(), 'jobs/job-open/photos/ph-seed')));
+    await assertSucceeds(getDoc(doc(as.assistant(), 'jobs/job-open/photos/ph-seed')));
+    await assertSucceeds(getDoc(doc(as.client(), 'jobs/job-open/files/fi-seed')));
+    await assertFails(getDoc(doc(as.otherClient(), 'jobs/job-open/photos/ph-seed')));
+    await assertFails(getDoc(doc(as.unverifiedClient(), 'jobs/job-open/files/fi-seed')));
+  });
+
+  it('assistant cannot read photos on completed jobs; admin can', async () => {
+    await assertFails(getDoc(doc(as.assistant(), 'jobs/job-done/photos/ph-done')));
+    await assertSucceeds(getDoc(doc(as.admin(), 'jobs/job-done/photos/ph-done')));
+  });
+
+  it('files over 10 MB are rejected', async () => {
+    await assertFails(setDoc(doc(as.admin(), 'jobs/job-open/files/fi-big'), newFile({ size: 11 * 1024 * 1024 })));
   });
 });
 
