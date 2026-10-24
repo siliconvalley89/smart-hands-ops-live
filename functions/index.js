@@ -16,6 +16,7 @@ const emailjsServiceId  = defineSecret('EMAILJS_SERVICE_ID');
 const emailjsTemplateId = defineSecret('EMAILJS_STATUS_TEMPLATE_ID');
 const emailjsPublicKey  = defineSecret('EMAILJS_PUBLIC_KEY');
 const emailjsPrivateKey = defineSecret('EMAILJS_PRIVATE_KEY');
+const emailjsInvoiceTemplateId = defineSecret('EMAILJS_INVOICE_TEMPLATE_ID');
 
 /**
  * Looks up the assigned tech's FCM token and sends a push notification
@@ -440,6 +441,58 @@ exports.sendPaymentReminders = onSchedule(
         console.error(`Receivables digest failed for ${adminEmail}:`, err.message);
       }
     }
+  },
+);
+
+// Emails the signed-off invoice to the client; retries link-only if EmailJS rejects the PDF attachment
+exports.sendInvoiceEmailOnSignOff = onDocumentUpdated(
+  {
+    document: 'jobs/{jobId}',
+    secrets: [emailjsServiceId, emailjsInvoiceTemplateId, emailjsPublicKey, emailjsPrivateKey],
+  },
+  async (event) => {
+    const before = event.data.before.data();
+    const after = event.data.after.data();
+    if (!after.invoicePdfPath || after.invoicePdfPath === before.invoicePdfPath || !after.clientEmail) return;
+
+    const jobId = event.params.jobId;
+    const serviceId = emailjsServiceId.value().trim();
+    const templateId = emailjsInvoiceTemplateId.value().trim();
+    const publicKey = emailjsPublicKey.value().trim();
+    const privateKey = emailjsPrivateKey.value().trim();
+
+    const [[pdfBytes], { balance }] = await Promise.all([
+      admin.storage().bucket().file(after.invoicePdfPath).download(),
+      getInvoiceBalance(jobId),
+    ]);
+    const templateParams = {
+      to_email:         after.clientEmail,
+      to_name:          after.client || 'Valued Customer',
+      job_id:           jobId,
+      amount_due:       `$${balance.toFixed(2)}`,
+      invoice_link:     'https://smart-hands-live.web.app',
+      invoice_filename: `SV-Smart-Dispatch-Invoice-${jobId}.pdf`,
+    };
+
+    const billingRef = admin.firestore().collection('jobBilling').doc(jobId);
+    let sentWith = 'attachment';
+    try {
+      await sendEmailJs(serviceId, templateId, publicKey, privateKey, {
+        ...templateParams,
+        invoice_pdf: pdfBytes.toString('base64'),
+      });
+    } catch (err) {
+      console.error(`Invoice email with attachment failed for job ${jobId}, sending link only:`, err.message);
+      sentWith = 'link';
+      try {
+        await sendEmailJs(serviceId, templateId, publicKey, privateKey, templateParams);
+      } catch (linkErr) {
+        console.error(`Invoice email failed for job ${jobId}:`, linkErr.message);
+        await billingRef.set({ invoiceEmailError: linkErr.message, invoiceEmailAttemptedAt: new Date() }, { merge: true });
+        return;
+      }
+    }
+    await billingRef.set({ invoiceEmailSentAt: new Date(), invoiceEmailSentWith: sentWith }, { merge: true });
   },
 );
 
