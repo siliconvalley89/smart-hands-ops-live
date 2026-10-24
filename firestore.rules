@@ -277,6 +277,50 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    function isValidQuote(quote) {
+      return quote.keys().hasOnly([
+        'client', 'clientEmail', 'clientPhone', 'location', 'task', 'details', 'lines',
+        'serviceFee', 'serviceFeeDescription', 'status', 'validUntil', 'createdAt', 'createdBy',
+        'updatedBy', 'updatedAt', 'sentAt', 'acceptedAt', 'jobId'
+      ]) &&
+        quote.keys().hasAll(['client', 'clientEmail', 'lines', 'serviceFee', 'status', 'validUntil', 'createdBy', 'updatedBy']) &&
+        quote.client is string &&
+        quote.clientEmail is string && quote.clientEmail.size() > 0 &&
+        quote.lines is list && quote.lines.size() > 0 && quote.lines.size() <= 50 &&
+        quote.serviceFee is number && quote.serviceFee >= 0 &&
+        quote.get('serviceFeeDescription', '') is string &&
+        quote.status in ['Draft', 'Sent', 'Withdrawn'] &&
+        quote.validUntil is timestamp;
+    }
+
+    match /quotes/{quoteId} {
+      allow read: if isAdmin() || isAdminAssistant() || (
+        isVerifiedClient() &&
+        resource.data.clientEmail == request.auth.token.email &&
+        resource.data.status in ['Sent', 'Accepted']
+      );
+      allow create: if (isAdmin() || isAdminAssistant()) &&
+        request.resource.data.status == 'Draft' &&
+        request.resource.data.createdBy == request.auth.token.email &&
+        request.resource.data.updatedBy == request.auth.token.email &&
+        isValidQuote(request.resource.data);
+      allow update: if (isAdmin() || isAdminAssistant()) && (
+        // Drafts are edited freely, then sent to the client
+        (resource.data.status == 'Draft' &&
+          request.resource.data.status in ['Draft', 'Sent'] &&
+          request.resource.data.createdBy == resource.data.createdBy &&
+          request.resource.data.updatedBy == request.auth.token.email &&
+          isValidQuote(request.resource.data)) ||
+        // A sent quote can only be withdrawn; its terms are fixed once sent
+        (resource.data.status == 'Sent' &&
+          request.resource.data.status == 'Withdrawn' &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedBy', 'updatedAt']) &&
+          request.resource.data.updatedBy == request.auth.token.email)
+      );
+      // Accepted quotes stay on record because they link to a job
+      allow delete: if isAdmin() && resource.data.status != 'Accepted';
+    }
+
     match /{path=**}/consumables/{itemId} {
       allow read: if isAdmin();
     }

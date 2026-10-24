@@ -5,6 +5,7 @@ const { defineSecret } = require('firebase-functions/params');
 const admin = require('firebase-admin');
 const { partStockAdjustments, stockChangeAlerts } = require('./stock');
 const { reminderStageFor } = require('./reminders');
+const { quoteTotalCents, quoteAcceptProblem, buildQuoteJob } = require('./quote');
 
 admin.initializeApp();
 
@@ -745,6 +746,84 @@ exports.sendInvoiceEmailOnSignOff = onDocumentUpdated(
     await billingRef.set({ invoiceEmailSentAt: new Date(), invoiceEmailSentWith: sentWith }, { merge: true });
   },
 );
+
+// Emails the client when staff send a quote; the client accepts it in the app
+exports.sendQuoteEmailOnSend = onDocumentUpdated(
+  {
+    document: 'quotes/{quoteId}',
+    secrets: [emailjsServiceId, emailjsTemplateId, emailjsPublicKey, emailjsPrivateKey],
+  },
+  async (event) => {
+    const before = event.data.before.data();
+    const after = event.data.after.data();
+    if (after.status !== 'Sent' || before.status === 'Sent' || !after.clientEmail) return;
+
+    const quoteId = event.params.quoteId;
+    const total = quoteTotalCents(after.lines, after.serviceFee) / 100;
+    const validUntil = after.validUntil.toDate().toLocaleDateString('en-US', {
+      month: 'short', day: 'numeric', year: 'numeric', timeZone: 'America/Los_Angeles',
+    });
+    try {
+      await sendEmailJs(
+        emailjsServiceId.value().trim(),
+        emailjsTemplateId.value().trim(),
+        emailjsPublicKey.value().trim(),
+        emailjsPrivateKey.value().trim(),
+        {
+          to_email:       after.clientEmail,
+          to_name:        after.client || 'Valued Customer',
+          job_status:     'Quote ready',
+          job_task:       after.task || '',
+          job_location:   after.location || '',
+          tech_name:      '',
+          status_message: `Your quote is ready. Total: $${total.toFixed(2)}. Valid until ${validUntil}. Sign in to review and accept it.`,
+          job_id:         quoteId,
+        },
+      );
+    } catch (err) {
+      console.error(`Quote email failed for quote ${quoteId}:`, err.message);
+    }
+  },
+);
+
+// Client accepts a sent quote; creates the pending job and its billing in one transaction
+exports.acceptQuote = onCall(async (request) => {
+  const token = request.auth?.token;
+  if (token?.role !== 'client' || token.email_verified !== true) {
+    throw new HttpsError('permission-denied', 'Only verified clients can accept quotes.');
+  }
+  const quoteId = String(request.data?.quoteId || '').trim();
+  if (!quoteId) throw new HttpsError('invalid-argument', 'Missing quote.');
+
+  const db = admin.firestore();
+  const quoteRef = db.collection('quotes').doc(quoteId);
+  const jobRef = db.collection('jobs').doc();
+  const now = new Date();
+
+  await db.runTransaction(async (tx) => {
+    const snap = await tx.get(quoteRef);
+    if (!snap.exists) throw new HttpsError('not-found', 'Quote not found.');
+    const quote = snap.data();
+    if (quote.clientEmail !== token.email) {
+      throw new HttpsError('permission-denied', 'This quote is not yours.');
+    }
+    const problem = quoteAcceptProblem(quote, now.getTime());
+    if (problem) throw new HttpsError('failed-precondition', problem);
+
+    const { job, billing, consumables } = buildQuoteJob(quote, { quoteId, acceptedBy: token.email, now });
+    tx.set(jobRef, job);
+    const consumablePrices = {};
+    for (const item of consumables) {
+      const itemRef = jobRef.collection('consumables').doc();
+      tx.set(itemRef, { description: item.description, qty: item.qty, createdAt: now });
+      consumablePrices[itemRef.id] = item.unitPrice;
+    }
+    tx.set(db.collection('jobBilling').doc(jobRef.id), { ...billing, consumablePrices });
+    tx.update(quoteRef, { status: 'Accepted', acceptedAt: now, jobId: jobRef.id, updatedBy: token.email, updatedAt: now });
+  });
+
+  return { jobId: jobRef.id };
+});
 
 // Mirrors users/{uid}.role into the Auth token so security rules can read it without get() calls
 exports.syncRoleClaim = onDocumentWritten('users/{uid}', async (event) => {

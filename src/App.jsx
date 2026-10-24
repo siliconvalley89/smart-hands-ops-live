@@ -33,6 +33,8 @@ import AuditLog from './features/AuditLog';
 import TimesheetExport from './features/TimesheetExport';
 import ReportsPanel from './features/ReportsPanel';
 import PartsInventory from './features/PartsInventory';
+import QuotesPanel from './features/QuotesPanel';
+import ClientQuotes from './features/ClientQuotes';
 import CompletedJobs from './features/CompletedJobs';
 import RequestForm from './features/RequestForm';
 import Accounts from './features/Accounts';
@@ -1373,6 +1375,10 @@ function App() {
           />
         )}
 
+        {profile.role === 'client' && firebaseUser?.emailVerified && firebaseUser?.email && (
+          <ClientQuotes clientEmail={firebaseUser.email} />
+        )}
+
         {canStaffManage && (
           <Accounts
             isAdmin={isAdmin}
@@ -1413,6 +1419,7 @@ function App() {
         {isAdmin && <TimesheetExport />}
         {isAdmin && <ReportsPanel />}
         {isAdmin && <PartsInventory parts={parts} />}
+        {canStaffManage && <QuotesPanel email={firebaseUser?.email || ''} isAdmin={isAdmin} />}
 
         <ActiveJobs
           profile={profile}

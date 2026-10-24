@@ -516,3 +516,81 @@ describe('technicians and badges', () => {
     await assertSucceeds(getDoc(doc(as.anon(), 'badges/tech-uid')));
   });
 });
+
+describe('quotes', () => {
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  const validQuote = (overrides = {}) => ({
+    client: 'Acme', clientEmail: CLIENT, clientPhone: '', location: '1 Main St', task: 'Rack install',
+    details: '', lines: [{ description: 'Cable', qty: 1, unitPrice: 10 }], serviceFee: 0, serviceFeeDescription: '',
+    status: 'Draft', validUntil: new Date(Date.now() + 30 * DAY_MS), createdAt: new Date(),
+    createdBy: ASSISTANT, updatedBy: ASSISTANT, ...overrides,
+  });
+
+  const seedQuote = (id, overrides = {}) => testEnv.withSecurityRulesDisabled(async (context) => {
+    await setDoc(doc(context.firestore(), `quotes/${id}`), validQuote(overrides));
+  });
+
+  it('assistant and admin create a draft attributed to themselves', async () => {
+    await assertSucceeds(setDoc(doc(as.assistant(), 'quotes/q-new'), validQuote()));
+    await assertSucceeds(setDoc(doc(as.admin(), 'quotes/q-new-admin'), validQuote({ createdBy: ADMIN, updatedBy: ADMIN })));
+  });
+
+  it('rejects creates that are not drafts, misattributed, or malformed', async () => {
+    await assertFails(setDoc(doc(as.assistant(), 'quotes/q-sent'), validQuote({ status: 'Sent' })));
+    await assertFails(setDoc(doc(as.assistant(), 'quotes/q-spoof'), validQuote({ createdBy: ADMIN })));
+    await assertFails(setDoc(doc(as.assistant(), 'quotes/q-empty'), validQuote({ lines: [] })));
+    await assertFails(setDoc(doc(as.assistant(), 'quotes/q-price'), validQuote({ serviceFee: -5 })));
+    await assertFails(setDoc(doc(as.assistant(), 'quotes/q-extra'), validQuote({ jobId: 'job-x', status: 'Draft', total: 1 })));
+  });
+
+  it('client reads only their own sent or accepted quotes, never drafts', async () => {
+    await seedQuote('q-draft');
+    await seedQuote('q-sent', { status: 'Sent' });
+    await seedQuote('q-accepted', { status: 'Accepted', jobId: 'job-x' });
+    await seedQuote('q-withdrawn', { status: 'Withdrawn' });
+    await assertFails(getDoc(doc(as.client(), 'quotes/q-draft')));
+    await assertFails(getDoc(doc(as.client(), 'quotes/q-withdrawn')));
+    await assertSucceeds(getDoc(doc(as.client(), 'quotes/q-sent')));
+    await assertSucceeds(getDoc(doc(as.client(), 'quotes/q-accepted')));
+    await assertFails(getDoc(doc(as.otherClient(), 'quotes/q-sent')));
+    await assertFails(getDoc(doc(as.unverifiedClient(), 'quotes/q-sent')));
+  });
+
+  it('staff read every quote; techs and anonymous users read none', async () => {
+    await seedQuote('q-draft');
+    await assertSucceeds(getDoc(doc(as.admin(), 'quotes/q-draft')));
+    await assertSucceeds(getDoc(doc(as.assistant(), 'quotes/q-draft')));
+    await assertFails(getDoc(doc(as.tech(), 'quotes/q-draft')));
+    await assertFails(getDoc(doc(as.anon(), 'quotes/q-draft')));
+  });
+
+  it('clients cannot create, edit, or accept quotes', async () => {
+    await seedQuote('q-sent', { status: 'Sent' });
+    await assertFails(setDoc(doc(as.client(), 'quotes/q-client'), validQuote({ createdBy: CLIENT, updatedBy: CLIENT })));
+    await assertFails(updateDoc(doc(as.client(), 'quotes/q-sent'), { status: 'Accepted' }));
+  });
+
+  it('draft is edited freely and sent; sent terms are fixed', async () => {
+    await seedQuote('q-draft');
+    await assertSucceeds(updateDoc(doc(as.assistant(), 'quotes/q-draft'), {
+      lines: [{ description: 'Cable', qty: 3, unitPrice: 10 }], updatedBy: ASSISTANT,
+    }));
+    await assertSucceeds(updateDoc(doc(as.assistant(), 'quotes/q-draft'), { status: 'Sent', sentAt: new Date(), updatedBy: ASSISTANT }));
+    await assertFails(updateDoc(doc(as.assistant(), 'quotes/q-draft'), { lines: [], updatedBy: ASSISTANT }));
+    await assertFails(updateDoc(doc(as.admin(), 'quotes/q-draft'), { status: 'Accepted', updatedBy: ADMIN }));
+  });
+
+  it('a sent quote can only be withdrawn, not reworded', async () => {
+    await seedQuote('q-sent', { status: 'Sent' });
+    await assertFails(updateDoc(doc(as.admin(), 'quotes/q-sent'), { lines: [{ description: 'Gold cable', qty: 1, unitPrice: 1 }], updatedBy: ADMIN }));
+    await assertSucceeds(updateDoc(doc(as.admin(), 'quotes/q-sent'), { status: 'Withdrawn', updatedBy: ADMIN, updatedAt: new Date() }));
+  });
+
+  it('only admin deletes, and never an accepted quote', async () => {
+    await seedQuote('q-draft');
+    await seedQuote('q-accepted', { status: 'Accepted', jobId: 'job-x' });
+    await assertFails(deleteDoc(doc(as.assistant(), 'quotes/q-draft')));
+    await assertFails(deleteDoc(doc(as.admin(), 'quotes/q-accepted')));
+    await assertSucceeds(deleteDoc(doc(as.admin(), 'quotes/q-draft')));
+  });
+});
