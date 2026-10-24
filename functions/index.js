@@ -227,17 +227,6 @@ async function notifyAdmins(jobId, alert) {
   await sendJobPush(targets, jobId, alert);
 }
 
-// Photos and files live in jobs/{id}/photos and jobs/{id}/files; legacy array fields are read until migrated
-function legacyPhotoUrls(job, type) {
-  const list = Array.isArray(job[`${type}Photos`]) ? job[`${type}Photos`] : [];
-  const legacy = job[`${type}PhotoUrl`];
-  return legacy && !list.includes(legacy) ? [legacy, ...list] : list;
-}
-
-function legacyAttachments(job) {
-  return Array.isArray(job.attachments) ? job.attachments : [];
-}
-
 async function refreshJobMediaCounts(jobId) {
   const jobRef = admin.firestore().collection('jobs').doc(jobId);
   const [jobSnap, photosSnap, filesSnap] = await Promise.all([
@@ -246,21 +235,12 @@ async function refreshJobMediaCounts(jobId) {
     jobRef.collection('files').get(),
   ]);
   if (!jobSnap.exists) return;
-  const job = jobSnap.data();
   const photoDocs = photosSnap.docs.map((d) => d.data());
   const photoCounts = {};
   for (const type of ['before', 'after']) {
-    const urls = new Set([
-      ...photoDocs.filter((p) => p.type === type).map((p) => p.url),
-      ...legacyPhotoUrls(job, type),
-    ]);
-    photoCounts[type] = urls.size;
+    photoCounts[type] = new Set(photoDocs.filter((p) => p.type === type).map((p) => p.url)).size;
   }
-  const fileUrls = new Set([
-    ...filesSnap.docs.map((d) => d.data().url),
-    ...legacyAttachments(job).map((f) => f.url),
-  ]);
-  photoCounts.files = fileUrls.size;
+  photoCounts.files = new Set(filesSnap.docs.map((d) => d.data().url)).size;
   await jobRef.update({ photoCounts });
 }
 
@@ -350,7 +330,6 @@ exports.syncPartStockOnConsumableWrite = onDocumentWritten('jobs/{jobId}/consuma
 });
 
 exports.notifyAdminsOnPhotoAdded = onDocumentCreated('jobs/{jobId}/photos/{photoId}', async (event) => {
-  if (event.data.data().migrated) return null;
   const jobId = event.params.jobId;
   const { who, site } = await jobAlertContext(jobId);
   await notifyAdmins(jobId, { title: 'Photo uploaded', body: `${who} added a photo at ${site}`, tag: `photos-${jobId}` });
@@ -358,66 +337,11 @@ exports.notifyAdminsOnPhotoAdded = onDocumentCreated('jobs/{jobId}/photos/{photo
 });
 
 exports.notifyAdminsOnFileAdded = onDocumentCreated('jobs/{jobId}/files/{fileId}', async (event) => {
-  if (event.data.data().migrated) return null;
   const jobId = event.params.jobId;
   const { who, site } = await jobAlertContext(jobId);
   await notifyAdmins(jobId, { title: 'File uploaded', body: `${who} added a file at ${site}`, tag: `files-${jobId}` });
   return null;
 });
-
-const LEGACY_MEDIA_FIELDS = ['beforePhotos', 'afterPhotos', 'beforePhotoUrl', 'afterPhotoUrl', 'attachments'];
-
-// Admin-only, idempotent: copies legacy job arrays into subcollections, then removes the arrays
-exports.migrateJobPhotos = onCall({ timeoutSeconds: 540, memory: '512MiB' }, async (request) => {
-  if (request.auth?.token?.role !== 'admin') throw new HttpsError('permission-denied', 'Admins only.');
-  const db = admin.firestore();
-  const summary = { jobs: 0, photos: 0, files: 0 };
-  let cursor = null;
-
-  for (;;) {
-    let pageQuery = db.collection('jobs').orderBy(admin.firestore.FieldPath.documentId()).limit(200);
-    if (cursor) pageQuery = pageQuery.startAfter(cursor);
-    const page = await pageQuery.get();
-    if (page.empty) break;
-    cursor = page.docs[page.docs.length - 1];
-
-    for (const jobDoc of page.docs) {
-      const job = jobDoc.data();
-      if (!LEGACY_MEDIA_FIELDS.some((field) => field in job)) continue;
-
-      const batch = db.batch();
-      let photoWrites = 0;
-      for (const type of ['before', 'after']) {
-        legacyPhotoUrls(job, type).filter(Boolean).forEach((url, index) => {
-          const id = `legacy-${type}-${String(index).padStart(4, '0')}`;
-          batch.set(jobDoc.ref.collection('photos').doc(id), {
-            type, url, uploadedAt: job.createdAt || null, uploadedBy: 'migration', migrated: true,
-          });
-          photoWrites += 1;
-        });
-      }
-      const fileWrites = legacyAttachments(job).filter((f) => f.url).map((file, index) => {
-        const id = `legacy-file-${String(index).padStart(4, '0')}`;
-        batch.set(jobDoc.ref.collection('files').doc(id), {
-          name: file.name || '', url: file.url, size: file.size || 0, type: file.type || '',
-          uploadedAt: job.createdAt || null, uploadedBy: 'migration', migrated: true,
-        });
-        return file;
-      });
-
-      const removals = Object.fromEntries(LEGACY_MEDIA_FIELDS.filter((field) => field in job).map((field) => [field, admin.firestore.FieldValue.delete()]));
-      batch.update(jobDoc.ref, removals);
-      await batch.commit();
-      await refreshJobMediaCounts(jobDoc.id);
-
-      summary.jobs += 1;
-      summary.photos += photoWrites;
-      summary.files += fileWrites.length;
-    }
-  }
-  return summary;
-});
-
 
 // Technicians hear about status changes made by staff; their own changes are excluded
 exports.notifyTechOnStaffStatusChange = onDocumentUpdated('jobs/{jobId}', async (event) => {

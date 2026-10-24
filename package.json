@@ -10,7 +10,7 @@
     "preview": "vite preview",
     "deploy": "firebase deploy --only hosting",
     "test:unit": "vitest run tests/unit",
-    "test:rules":"firebase emulators:exec --only firestore --project demo-smart-hands-ops \"node --test tests/rules/firestore.rules.test.mjs\""
+    "test:rules":"firebase emulators:exec --only firestore,storage --project demo-smart-hands-ops \"node --test --test-concurrency=1 tests/rules/firestore.rules.test.mjs tests/rules/storage.rules.test.mjs\""
   },
   "dependencies": {
     "autoprefixer": "^10.4.23",

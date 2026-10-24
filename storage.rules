@@ -1,9 +1,43 @@
 rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
+    function role() {
+      return request.auth.token.role;
+    }
+
+    function isVerifiedStaffTech() {
+      return role() in ['tech', 'seniorConsultant'] && request.auth.token.email_verified == true;
+    }
+
+    function jobData(jobId) {
+      return firestore.get(/databases/(default)/documents/jobs/$(jobId)).data;
+    }
+
+    function isMigrated(job) {
+      return 'billingMigrated' in job && job.billingMigrated == true;
+    }
+
+    function isInvoiced(job) {
+      return 'invoiceSent' in job && job.invoiceSent == true;
+    }
+
+    function canReadJobMedia(jobId) {
+      return role() == 'admin' ||
+        (role() == 'adminAssistant' && jobData(jobId).status != 'Completed' && isMigrated(jobData(jobId))) ||
+        (role() == 'client' && request.auth.token.email_verified == true && jobData(jobId).clientEmail == request.auth.token.email) ||
+        (isVerifiedStaffTech() && jobData(jobId).assignedTechEmail == request.auth.token.email && isMigrated(jobData(jobId)));
+    }
+
+    function canManageJobMedia(jobId) {
+      return role() == 'admin' ||
+        (isVerifiedStaffTech() && jobData(jobId).assignedTechEmail == request.auth.token.email &&
+          isMigrated(jobData(jobId)) && !isInvoiced(jobData(jobId)));
+    }
+
     match /jobs/{jobId}/{fileName} {
-      allow read: if request.auth != null;
-      allow write: if request.auth != null && request.resource.size < 10 * 1024 * 1024;
+      allow read: if request.auth != null && canReadJobMedia(jobId);
+      allow create, update: if request.auth != null && canManageJobMedia(jobId) && request.resource.size < 10 * 1024 * 1024;
+      allow delete: if request.auth != null && canManageJobMedia(jobId);
     }
     match /users/{userId}/profile-photo {
       allow read: if request.auth != null;
