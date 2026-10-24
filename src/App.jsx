@@ -17,7 +17,8 @@ import { isJobDispatched, isJobAssigned, formatSchedule, findTechConflict } from
 import { calculateDistanceMiles } from './lib/geo';
 import { MAX_ATTACHMENT_BYTES, ATTACHMENT_ACCEPT, PHOTO_MAX_DIMENSION, PHOTO_JPEG_QUALITY, downloadPhotoFile, fileToSquareDataUrl, compressPhotoForUpload } from './lib/media';
 import { prepareBadge, generateBadgePdf } from './lib/badge';
-import Receivables from './features/Receivables';
+import { uploadInvoicePdf } from './lib/invoice';
+import ReceivablesSection from './features/ReceivablesSection';
 import useAuthProfile from './hooks/useAuthProfile';
 import useJobs from './hooks/useJobs';
 import useTechs from './hooks/useTechs';
@@ -916,12 +917,22 @@ function App() {
   };
 
   const adminSignOffWork = async (job) => {
+    if (!(Number(job.serviceFee) > 0)) {
+      setAppError('Enter a service fee before signing off.');
+      return;
+    }
     try {
-      const updates = { adminSignedOff: true, adminSignedOffAt: new Date() };
+      const signedOffAt = new Date();
+      const updates = { adminSignedOff: true, adminSignedOffAt: signedOffAt };
+      if (!job.invoicePdfPath) {
+        updates.invoicePdfPath = await uploadInvoicePdf(job, signedOffAt);
+        updates.invoiceSent = true;
+        updates.invoiceSentAt = signedOffAt;
+      }
       if (job.status !== 'Completed') {
         updates.status = 'Completed';
         updates.statusUpdatedByRole = profile.role;
-        updates.completedAt = new Date();
+        updates.completedAt = signedOffAt;
       }
       await updateDoc(doc(db, 'jobs', job.id), updates);
     } catch (error) {
@@ -1362,22 +1373,12 @@ function App() {
         )}
 
         {isAdmin && (
-          <section className="grid gap-4">
-            <div className="flex items-center justify-between rounded-3xl bg-slate-800 border border-slate-700 p-4">
-              <div>
-                <h2 className="text-xl font-semibold text-white">Receivables</h2>
-                <p className="text-slate-400 text-sm mt-1">Invoices awaiting payment, aging, and manual payment recording.</p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setShowReceivablesPanel((prev) => !prev)}
-                className="rounded-2xl border border-slate-600 px-4 py-2 text-sm text-slate-200 hover:bg-slate-800 transition"
-              >
-                {showReceivablesPanel ? 'Collapse' : 'Expand'}
-              </button>
-            </div>
-            {showReceivablesPanel && <Receivables recordedBy={firebaseUser?.email || ''} setAppError={setAppError} />}
-          </section>
+          <ReceivablesSection
+            showReceivablesPanel={showReceivablesPanel}
+            setShowReceivablesPanel={setShowReceivablesPanel}
+            recordedBy={firebaseUser?.email || ''}
+            setAppError={setAppError}
+          />
         )}
 
         <ActiveJobs

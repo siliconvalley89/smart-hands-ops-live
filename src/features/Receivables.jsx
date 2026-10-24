@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { collection, collectionGroup, onSnapshot, query, where } from 'firebase/firestore';
+import { collection, collectionGroup, onSnapshot, or, query, where } from 'firebase/firestore';
 import { db } from '../firebase';
 import { AGING_BUCKETS, PAYMENT_METHODS, getAgingBucket, getReceivableStatus, recordPayment, voidPayment } from '../lib/payments';
 
@@ -47,7 +47,7 @@ export default function Receivables({ recordedBy, setAppError }) {
     };
     const unsubscribes = [
       onSnapshot(
-        query(collection(db, 'jobs'), where('invoiceSent', '==', true)),
+        query(collection(db, 'jobs'), or(where('status', '==', 'Completed'), where('invoiceSent', '==', true))),
         (snapshot) => setInvoicedJobs(snapshot.docs.map((item) => ({ id: item.id, ...item.data() }))),
         onError('jobs'),
       ),
