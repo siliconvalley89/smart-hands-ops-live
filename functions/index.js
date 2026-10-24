@@ -1,5 +1,5 @@
 const { onDocumentCreated, onDocumentUpdated } = require('firebase-functions/v2/firestore');
-const { onRequest, onCall, HttpsError } = require('firebase-functions/v2/https');
+const { onRequest } = require('firebase-functions/v2/https');
 const { defineSecret } = require('firebase-functions/params');
 const admin = require('firebase-admin');
 
@@ -307,102 +307,6 @@ exports.manageTechStatusOnJobUpdated = onDocumentUpdated(
   }
 
   return null;
-});
-
-exports.migrateJobBilling = onCall({ timeoutSeconds: 540, memory: '1GiB' }, async (request) => {
-  if (!request.auth) {
-    throw new HttpsError('unauthenticated', 'Sign in as an admin to migrate job billing data.');
-  }
-
-  const db = admin.firestore();
-  const userSnapshot = await db.collection('users').doc(request.auth.uid).get();
-  if (!userSnapshot.exists || userSnapshot.data().role !== 'admin') {
-    throw new HttpsError('permission-denied', 'Only admins can migrate job billing data.');
-  }
-
-  const cursor = request.data?.cursor ?? null;
-  if (cursor != null && typeof cursor !== 'string') {
-    throw new HttpsError('invalid-argument', 'The migration cursor must be a job ID.');
-  }
-  let migrated = 0;
-  const pageSize = 20;
-  let jobsQuery = db.collection('jobs')
-    .orderBy(admin.firestore.FieldPath.documentId())
-    .limit(pageSize);
-  if (cursor) jobsQuery = jobsQuery.startAfter(cursor);
-  const snapshot = await jobsQuery.get();
-
-  for (const jobDocument of snapshot.docs) {
-      const jobRef = jobDocument.ref;
-      const billingRef = db.collection('jobBilling').doc(jobDocument.id);
-      const wasMigrated = await db.runTransaction(async (transaction) => {
-        const liveJobSnapshot = await transaction.get(jobRef);
-        if (!liveJobSnapshot.exists) return false;
-        const job = liveJobSnapshot.data();
-        const legacyItems = Array.isArray(job.consumables) ? job.consumables : [];
-        const hasLegacyBilling = Object.prototype.hasOwnProperty.call(job, 'serviceFee')
-          || Object.prototype.hasOwnProperty.call(job, 'serviceFeeDescription')
-          || Object.prototype.hasOwnProperty.call(job, 'consumables');
-        if (job.billingMigrated === true && !hasLegacyBilling) return false;
-        if (legacyItems.length > 450) {
-          throw new HttpsError('failed-precondition', `Job ${jobDocument.id} has too many consumable lines to migrate safely.`);
-        }
-
-        const billingSnapshot = await transaction.get(billingRef);
-        const existingBilling = billingSnapshot.exists ? billingSnapshot.data() : {};
-        const consumablePrices = { ...(existingBilling.consumablePrices || {}) };
-        const itemsToWrite = legacyItems.map((item, index) => {
-          const itemId = `legacy-${index}`;
-          const qty = Number(item.qty ?? 1);
-          const unitPrice = Number(consumablePrices[itemId] ?? item.unitPrice ?? 0);
-          if (!Number.isFinite(qty) || qty < 1 || !Number.isFinite(unitPrice) || unitPrice < 0) {
-            throw new HttpsError('failed-precondition', `Job ${jobDocument.id} has invalid consumable quantities or prices.`);
-          }
-          if (consumablePrices[itemId] == null) consumablePrices[itemId] = unitPrice;
-          return {
-            ref: jobRef.collection('consumables').doc(itemId),
-            data: {
-              description: String(item.description || ''),
-              qty,
-              createdAt: item.createdAt || admin.firestore.FieldValue.serverTimestamp(),
-            },
-          };
-        });
-
-        const serviceFee = Number(existingBilling.serviceFee ?? job.serviceFee ?? 0);
-        if (!Number.isFinite(serviceFee) || serviceFee < 0) {
-          throw new HttpsError('failed-precondition', `Job ${jobDocument.id} has an invalid service fee.`);
-        }
-        itemsToWrite.forEach(({ ref, data }) => transaction.set(ref, data));
-        transaction.set(billingRef, {
-          serviceFee,
-          serviceFeeDescription: existingBilling.serviceFeeDescription ?? job.serviceFeeDescription ?? '',
-          consumablePrices,
-          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        }, { merge: true });
-        transaction.update(jobRef, {
-          consumables: admin.firestore.FieldValue.delete(),
-          serviceFee: admin.firestore.FieldValue.delete(),
-          serviceFeeDescription: admin.firestore.FieldValue.delete(),
-          billingMigrated: true,
-        });
-        return true;
-      });
-    if (wasMigrated) migrated += 1;
-  }
-
-  const nextCursor = snapshot.size === pageSize ? snapshot.docs[snapshot.docs.length - 1].id : null;
-  if (!nextCursor) {
-    await db.collection('systemMetadata').doc('billingMigration').set({
-      completed: true,
-      completedAt: admin.firestore.FieldValue.serverTimestamp(),
-    }, { merge: true });
-  }
-
-  return {
-    migrated,
-    nextCursor,
-  };
 });
 
 // ── Website form → Firestore job ──────────────────────────────────────────────

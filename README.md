@@ -19,4 +19,4 @@ If you are developing a production application, we recommend using TypeScript wi
 
 Job fees and consumable prices are stored in the `jobBilling` collection, which is readable only by admins and the job's client. Consumable descriptions and quantities live in each job's `consumables` subcollection; assigned technicians may manage those fields but cannot read or write prices.
 
-Deploy with `firebase deploy --only functions,firestore:rules,hosting`, then sign in as an admin and select **Secure existing billing** to migrate existing jobs. Technician access to any unmigrated job is intentionally blocked until the migration completes. If it reports an error, correct the reported data issue and run the migration again; it is safe to rerun.
+Deploy with `firebase deploy --only functions,firestore:rules,hosting`.

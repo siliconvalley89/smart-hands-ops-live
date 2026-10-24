@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { db, storage, auth, messaging, functions, VAPID_KEY } from './firebase';
+import { db, storage, auth, messaging, VAPID_KEY } from './firebase';
 import { collection, onSnapshot, addDoc, query, orderBy, deleteDoc, doc, updateDoc, getDocs, getDoc, setDoc, where, limit, getCountFromServer, writeBatch } from 'firebase/firestore';
-import { httpsCallable } from 'firebase/functions';
 import { ref, uploadBytes, getDownloadURL, getBlob } from 'firebase/storage';
 import { getToken } from 'firebase/messaging';
 import {
@@ -640,9 +639,6 @@ function App() {
   const [profilePhotoUploadBusy, setProfilePhotoUploadBusy] = useState(false);
   const [badgeViewUrl, setBadgeViewUrl] = useState(null);
   const [geoEventBusyJobId, setGeoEventBusyJobId] = useState(null);
-  const [billingMigrationBusy, setBillingMigrationBusy] = useState(false);
-  const [billingMigrationMessage, setBillingMigrationMessage] = useState('');
-  const [billingMigrationComplete, setBillingMigrationComplete] = useState(false);
   const [sessionRestoreCount, setSessionRestoreCount] = useState(0);
   const [savedRoles, setSavedRoles] = useState({});
   const [requestFormOpen, setRequestFormOpen] = useState(false);
@@ -890,21 +886,6 @@ function App() {
       setUsers(userItems);
     });
     return () => unsubscribe();
-  }, [profile?.role]);
-
-  useEffect(() => {
-    if (profile?.role !== 'admin') {
-      setBillingMigrationComplete(false);
-      return () => {};
-    }
-    return onSnapshot(
-      doc(db, 'systemMetadata', 'billingMigration'),
-      (snapshot) => setBillingMigrationComplete(snapshot.data()?.completed === true),
-      (error) => {
-        console.error('Unable to load billing migration status', error);
-        setAppError('Unable to load billing migration status.');
-      },
-    );
   }, [profile?.role]);
 
   useEffect(() => {
@@ -1516,30 +1497,6 @@ function App() {
     } catch (error) {
       console.error('Delete consumable failed', error);
       setAppError('Unable to delete consumable.');
-    }
-  };
-
-  const migrateJobBillingData = async () => {
-    if (profile?.role !== 'admin' || billingMigrationBusy) return;
-    if (!(await askConfirm('Move existing job prices into protected billing records? Technicians will be unable to view jobs until each job is migrated.', 'Continue'))) return;
-    setBillingMigrationBusy(true);
-    setBillingMigrationMessage('');
-    try {
-      const migrate = httpsCallable(functions, 'migrateJobBilling');
-      let cursor = null;
-      let totalMigrated = 0;
-      do {
-        const result = await migrate({ cursor });
-        totalMigrated += result.data.migrated;
-        cursor = result.data.nextCursor;
-        setBillingMigrationMessage(`Securing billing... ${totalMigrated} job(s) processed.`);
-      } while (cursor);
-      setBillingMigrationMessage(`Secured billing for ${totalMigrated} job(s).`);
-    } catch (error) {
-      console.error('Billing data migration failed', error);
-      setAppError('Unable to finish billing data migration. You can safely run it again.');
-    } finally {
-      setBillingMigrationBusy(false);
     }
   };
 
@@ -2400,27 +2357,6 @@ function App() {
               <p className="text-slate-400 text-sm mt-1">Jobs currently in progress or awaiting dispatch.</p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              {profile?.role === 'admin' && (
-                <>
-                  {billingMigrationComplete ? (
-                    <span role="status" className="rounded-2xl border border-emerald-700 px-4 py-2 text-sm text-emerald-300">
-                      Billing secured
-                    </span>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={migrateJobBillingData}
-                      disabled={billingMigrationBusy}
-                      className="rounded-2xl border border-amber-700 px-4 py-2 text-sm text-amber-200 hover:bg-amber-900/40 disabled:opacity-60 transition"
-                    >
-                      {billingMigrationBusy ? 'Securing billing...' : 'Secure existing billing'}
-                    </button>
-                  )}
-                  {billingMigrationMessage && (
-                    <span role="status" className="text-sm text-emerald-300">{billingMigrationMessage}</span>
-                  )}
-                </>
-              )}
               <button
                 type="button"
                 onClick={() => setShowJobsPanel((prev) => !prev)}
