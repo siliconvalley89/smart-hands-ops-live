@@ -3,7 +3,8 @@ const { onRequest, onCall, HttpsError } = require('firebase-functions/v2/https')
 const { onSchedule } = require('firebase-functions/v2/scheduler');
 const { defineSecret } = require('firebase-functions/params');
 const admin = require('firebase-admin');
-const { partStockAdjustments } = require('./stock');
+const { partStockAdjustments, stockChangeAlerts } = require('./stock');
+const { reminderStageFor } = require('./reminders');
 
 admin.initializeApp();
 
@@ -321,15 +322,29 @@ exports.syncPartStockOnConsumableWrite = onDocumentWritten('jobs/{jobId}/consuma
   if (!partIds.length) return null;
   const db = admin.firestore();
   const markerRef = db.collection('stockEvents').doc(event.id);
-  await db.runTransaction(async (tx) => {
-    if ((await tx.get(markerRef)).exists) return;
+  const changes = await db.runTransaction(async (tx) => {
+    if ((await tx.get(markerRef)).exists) return [];
     const partRefs = partIds.map((partId) => db.collection('parts').doc(partId));
     const partSnaps = await Promise.all(partRefs.map((ref) => tx.get(ref)));
+    const applied = [];
     partSnaps.forEach((snap, index) => {
-      if (snap.exists) tx.update(partRefs[index], { onHand: admin.firestore.FieldValue.increment(adjustments[partIds[index]]) });
+      if (!snap.exists) return;
+      const partId = partIds[index];
+      const delta = adjustments[partId];
+      const data = snap.data();
+      const before = Number(data.onHand) || 0;
+      tx.update(partRefs[index], { onHand: admin.firestore.FieldValue.increment(delta) });
+      applied.push({ partId, name: data.name, delta, before, after: before + delta, reorderPoint: Number(data.reorderPoint) || 0 });
     });
     tx.set(markerRef, { createdAt: new Date() });
+    return applied;
   });
+  const alerts = stockChangeAlerts(changes, event.params.jobId);
+  if (!alerts.length) return null;
+  const targets = await getPushTargets(db.collection('users').where('role', 'in', ['admin', 'adminAssistant']));
+  for (const alert of alerts) {
+    await sendJobPush(targets, event.params.jobId, alert);
+  }
   return null;
 });
 
@@ -626,8 +641,8 @@ exports.sendPaymentReminders = onSchedule(
       const daysOverdue = Math.floor((now - dueMs) / DAY_MS);
       overdue.push({ jobId: jobDoc.id, job, balance, daysOverdue });
 
-      const stageNumber = REMINDER_STAGES.findIndex((stage) => stage.afterDays === daysOverdue) + 1;
-      if (stageNumber === 0 || stageNumber <= (billing.paymentReminderStage || 0) || !job.clientEmail) continue;
+      const stageNumber = reminderStageFor(daysOverdue, REMINDER_STAGES);
+      if (stageNumber <= (billing.paymentReminderStage || 0) || !job.clientEmail) continue;
 
       try {
         await sendEmailJs(serviceId, templateId, publicKey, privateKey, {

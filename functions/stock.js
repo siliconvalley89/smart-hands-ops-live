@@ -11,4 +11,25 @@ function partStockAdjustments(before, after) {
   return adjustments;
 }
 
-module.exports = { partStockAdjustments };
+function stockChangeAlerts(changes, jobId) {
+  const alerts = [];
+  for (const change of changes) {
+    if (change.delta < 0) {
+      alerts.push({
+        title: 'Part used',
+        body: `${-change.delta} x ${change.name} used on job ${jobId}. ${change.after} on hand.`,
+        tag: `part-used-${change.partId}`,
+      });
+    }
+    if (change.before > change.reorderPoint && change.after <= change.reorderPoint) {
+      alerts.push({
+        title: 'Reorder part',
+        body: `${change.name} is down to ${change.after} on hand (reorder at ${change.reorderPoint}).`,
+        tag: `part-low-${change.partId}`,
+      });
+    }
+  }
+  return alerts;
+}
+
+module.exports = { partStockAdjustments, stockChangeAlerts };
