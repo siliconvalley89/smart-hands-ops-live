@@ -243,19 +243,6 @@ function App() {
     };
   };
 
-  const findNearestTechnician = (clientLat, clientLng, targetJob) => {
-    const availableTechs = techs.filter((tech) => tech.lat != null && tech.lng != null && !findTechConflict(targetJob, tech.email, jobs));
-    if (availableTechs.length === 0) return null;
-
-    return availableTechs.reduce((nearest, tech) => {
-      const distanceMiles = calculateDistanceMiles(clientLat, clientLng, tech.lat, tech.lng);
-      if (!nearest || distanceMiles < nearest.distanceMiles) {
-        return { ...tech, distanceMiles };
-      }
-      return nearest;
-    }, null);
-  };
-
   const submitRequest = async (event) => {
     event.preventDefault();
     setRequestError('');
@@ -275,7 +262,6 @@ function App() {
 
     try {
       const geo = await geocodeAddress(requestForm.location);
-      // Auto-assign the nearest tech with no overlapping job; techs are only marked busy once en route / on site
       const scheduledDate = requestForm.scheduledFor ? new Date(requestForm.scheduledFor) : null;
       let scheduledEndDate = null;
       if (scheduledDate && requestForm.scheduledEndTime) {
@@ -287,7 +273,7 @@ function App() {
           scheduledEndDate.setDate(scheduledEndDate.getDate() + 1);
         }
       }
-      const nearest = findNearestTechnician(geo.lat, geo.lng, { scheduledFor: scheduledDate, scheduledEnd: scheduledEndDate });
+      // The assignTechOnJobCreate function assigns the technician after the job is created
       await addDoc(collection(db, 'jobs'), {
         client: resolvedClientName,
         clientEmail: resolvedClientEmail,
@@ -301,12 +287,8 @@ function App() {
         serialNumber: requestForm.serialNumber || '',
         scheduledFor: scheduledDate,
         scheduledEnd: scheduledEndDate,
-        status: nearest ? 'Assigned' : 'Pending',
+        status: 'Pending',
         createdByRole: profile.role,
-        assignedTechName: nearest?.name || '',
-        assignedTechEmail: nearest?.email || '',
-        assignedTechDistanceMiles: nearest?.distanceMiles || null,
-        assignedTechDistanceKm: nearest?.distanceKm || null,
         billingMigrated: true,
         invoiceSent: false,
         beforePhotoUrl: '',
@@ -314,7 +296,7 @@ function App() {
         clientSignedOff: false,
         createdAt: new Date(),
       });
-      setRequestSuccess(nearest ? `Assigned to ${nearest.name}` : 'Request submitted. No available tech found yet.');
+      setRequestSuccess('Request submitted.');
       setRequestForm({
         name: profile?.role === 'client' ? (profile.displayName || '') : '',
         email: profile?.role === 'client' ? (profile.email || firebaseUser?.email || '') : '',

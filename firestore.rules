@@ -122,13 +122,13 @@ service cloud.firestore {
           request.resource.data.get('invoiceSent', false) == false) ||
         (isVerifiedClient() &&
           request.resource.data.clientEmail == request.auth.token.email &&
+          request.resource.data.status == 'Pending' &&
+          request.resource.data.createdByRole == 'client' &&
           jobHasNoEmbeddedBilling(request.resource.data) &&
-          request.resource.data.get('createdByRole', '') != 'admin' &&
           request.resource.data.keys().hasOnly([
             'client', 'clientEmail', 'clientPhone', 'location', 'rawLocation', 'lat', 'lng',
             'task', 'details', 'serialNumber', 'scheduledFor', 'scheduledEnd', 'status',
-            'assignedTechName', 'assignedTechEmail', 'assignedTechDistanceMiles',
-            'assignedTechDistanceKm', 'billingMigrated', 'invoiceSent', 'beforePhotoUrl',
+            'billingMigrated', 'invoiceSent', 'beforePhotoUrl',
             'afterPhotoUrl', 'clientSignedOff', 'createdAt', 'createdByRole'
           ]))
       );

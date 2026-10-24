@@ -141,6 +141,25 @@ describe('jobs', () => {
     await assertFails(setDoc(doc(as.assistant(), 'jobs/new-3'), newJob({ invoiceSent: true })));
   });
 
+  it('client creates a pending request for self without tech fields', async () => {
+    await assertSucceeds(setDoc(doc(as.client(), 'jobs/new-client-1'), newJob({ createdByRole: 'client' })));
+  });
+
+  it('client cannot create a job with a status other than Pending', async () => {
+    await assertFails(setDoc(doc(as.client(), 'jobs/new-client-2'), newJob({ createdByRole: 'client', status: 'Assigned' })));
+  });
+
+  it('client cannot pick a technician when creating a job', async () => {
+    await assertFails(setDoc(doc(as.client(), 'jobs/new-client-3'), newJob({
+      createdByRole: 'client', assignedTechEmail: TECH, assignedTechName: 'Tia',
+    })));
+  });
+
+  it('client cannot create a job for another client or as admin', async () => {
+    await assertFails(setDoc(doc(as.client(), 'jobs/new-client-4'), newJob({ createdByRole: 'client', clientEmail: OTHER_CLIENT })));
+    await assertFails(setDoc(doc(as.client(), 'jobs/new-client-5'), newJob({ createdByRole: 'admin' })));
+  });
+
   it('assigned tech advances status', async () => {
     await assertSucceeds(updateDoc(doc(as.tech(), 'jobs/job-open'), { status: 'En Route' }));
   });

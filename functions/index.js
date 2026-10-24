@@ -296,6 +296,90 @@ exports.manageTechStatusOnJobCreated = onDocumentCreated('jobs/{jobId}', async (
   return null;
 });
 
+// ── Auto-assign: nearest technician with no overlapping job ──────────────────
+const JOB_WINDOW_MS = 2 * 60 * 60 * 1000;
+const APP_CREATOR_ROLES = ['client', 'adminAssistant', 'admin'];
+
+function toMillisValue(value) {
+  if (!value) return null;
+  const ms = typeof value.toMillis === 'function' ? value.toMillis() : new Date(value).getTime();
+  return Number.isNaN(ms) ? null : ms;
+}
+
+function getJobWindowMs(job, now) {
+  const scheduled = toMillisValue(job.scheduledFor);
+  if (scheduled != null) {
+    const end = toMillisValue(job.scheduledEnd);
+    return { start: scheduled, end: end != null && end > scheduled ? end : scheduled + JOB_WINDOW_MS };
+  }
+  if (job.status === 'En Route' || (job.status === 'On Site' && !job.checkOutAt)) {
+    return { start: now, end: now + JOB_WINDOW_MS };
+  }
+  return null;
+}
+
+function hasTechConflict(target, techEmail, openJobs, now) {
+  const targetWindow = getJobWindowMs(target, now) || { start: now, end: now + JOB_WINDOW_MS };
+  return openJobs.some((other) => {
+    if (other.id === target.id || other.assignedTechEmail !== techEmail) return false;
+    const otherWindow = getJobWindowMs(other, now);
+    return otherWindow && otherWindow.start < targetWindow.end && targetWindow.start < otherWindow.end;
+  });
+}
+
+function distanceMiles(lat1, lon1, lat2, lon2) {
+  const toRad = (value) => (value * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  return 3958.8 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+exports.assignTechOnJobCreate = onDocumentCreated('jobs/{jobId}', async (event) => {
+  const job = event.data.data();
+  if (!APP_CREATOR_ROLES.includes(job.createdByRole)) return null;
+  if (job.status !== 'Pending' || job.assignedTechEmail) return null;
+  if (typeof job.lat !== 'number' || typeof job.lng !== 'number') return null;
+
+  const db = admin.firestore();
+  const jobId = event.params.jobId;
+  const [techsSnap, openSnap] = await Promise.all([
+    db.collection('technicians').get(),
+    db.collection('jobs').where('status', '!=', 'Completed').get(),
+  ]);
+
+  const now = Date.now();
+  const target = { id: jobId, ...job };
+  const openJobs = openSnap.docs.map((docItem) => ({ id: docItem.id, ...docItem.data() }));
+
+  let nearest = null;
+  for (const techDoc of techsSnap.docs) {
+    const tech = techDoc.data();
+    if (!tech.email || typeof tech.lat !== 'number' || typeof tech.lng !== 'number') continue;
+    if (hasTechConflict(target, tech.email, openJobs, now)) continue;
+    const miles = distanceMiles(job.lat, job.lng, tech.lat, tech.lng);
+    if (!nearest || miles < nearest.miles) nearest = { name: tech.name || '', email: tech.email, miles };
+  }
+  if (!nearest) return null;
+
+  const ref = db.collection('jobs').doc(jobId);
+  await db.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    if (!snap.exists) return;
+    const current = snap.data();
+    if (current.status !== 'Pending' || current.assignedTechEmail) return;
+    tx.update(ref, {
+      status: 'Assigned',
+      statusUpdatedByRole: 'system',
+      assignedTechName: nearest.name,
+      assignedTechEmail: nearest.email,
+      assignedTechDistanceMiles: nearest.miles,
+      assignedTechDistanceKm: null,
+    });
+  });
+  return null;
+});
+
 // Fires on job update — syncs technician availability when assignment changes or job completes
 // Also sends EmailJS status emails to the client on key status transitions.
 exports.manageTechStatusOnJobUpdated = onDocumentUpdated(
