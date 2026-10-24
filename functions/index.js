@@ -1,4 +1,4 @@
-const { onDocumentCreated, onDocumentUpdated } = require('firebase-functions/v2/firestore');
+const { onDocumentCreated, onDocumentUpdated, onDocumentWritten } = require('firebase-functions/v2/firestore');
 const { onRequest } = require('firebase-functions/v2/https');
 const { defineSecret } = require('firebase-functions/params');
 const admin = require('firebase-admin');
@@ -306,6 +306,24 @@ exports.manageTechStatusOnJobUpdated = onDocumentUpdated(
     );
   }
 
+  return null;
+});
+
+// Mirrors users/{uid}.role into the Auth token so security rules can read it without get() calls
+exports.syncRoleClaim = onDocumentWritten('users/{uid}', async (event) => {
+  const uid = event.params.uid;
+  const role = event.data.after.exists ? event.data.after.data().role || null : null;
+
+  const user = await admin.auth().getUser(uid).catch((err) => {
+    if (err.code === 'auth/user-not-found') return null;
+    throw err;
+  });
+  if (!user || (user.customClaims?.role ?? null) === role) return null;
+
+  const claims = { ...(user.customClaims || {}) };
+  if (role) claims.role = role;
+  else delete claims.role;
+  await admin.auth().setCustomUserClaims(uid, claims);
   return null;
 });
 

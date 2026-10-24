@@ -8,6 +8,7 @@ import {
   signInWithEmailAndPassword,
   signOut as firebaseSignOut,
   onAuthStateChanged,
+  sendEmailVerification,
   EmailAuthProvider,
   reauthenticateWithCredential,
   updatePassword,
@@ -40,6 +41,8 @@ const formatDate = (value) => {
 };
 
 // Returns all photo URLs for a job, including the legacy single-photo field.
+const isFieldRole = (role) => role === 'tech' || role === 'seniorConsultant';
+
 const getJobPhotos = (job, type) => {
   const list = Array.isArray(job?.[`${type}Photos`]) ? job[`${type}Photos`] : [];
   const legacy = job?.[`${type}PhotoUrl`];
@@ -644,6 +647,7 @@ function App() {
   const [requestFormOpen, setRequestFormOpen] = useState(false);
   const [editingJobId, setEditingJobId] = useState(null);
   const [jobEdits, setJobEdits] = useState({});
+  const [verifyMessage, setVerifyMessage] = useState('');
   const suppressAuthStateRef = useRef(false);
 
   useEffect(() => {
@@ -682,7 +686,7 @@ function App() {
   // Register this device's FCM push token whenever a tech or admin logs in
   useEffect(() => {
     if (!firebaseUser || !profile) return;
-    if (profile.role !== 'tech' && profile.role !== 'admin') return;
+    if (!isFieldRole(profile.role) && profile.role !== 'admin') return;
     if (!VAPID_KEY || VAPID_KEY === 'PASTE_YOUR_VAPID_KEY_HERE') return;
 
     const registerFcmToken = async () => {
@@ -734,7 +738,7 @@ function App() {
       jobsQuery = query(collection(db, 'jobs'), where('status', '!=', 'Completed'));
     } else if (profile.role === 'adminAssistant') {
       jobsQuery = query(collection(db, 'jobs'), where('billingMigrated', '==', true), where('status', '!=', 'Completed'));
-    } else if (profile.role === 'tech') {
+    } else if (isFieldRole(profile.role)) {
       jobsQuery = query(collection(db, 'jobs'), where('assignedTechEmail', '==', profile.email || firebaseUser?.email || ''), where('billingMigrated', '==', true), where('status', '!=', 'Completed'));
     } else {
       jobsQuery = query(collection(db, 'jobs'), where('clientEmail', '==', profile.email || firebaseUser?.email || ''), where('status', '!=', 'Completed'));
@@ -770,7 +774,7 @@ function App() {
   const COMPLETED_PAGE_SIZE = 25;
   const scopedCompletedConstraints = () => {
     const email = profile?.email || firebaseUser?.email || '';
-    if (profile?.role === 'tech') return [where('assignedTechEmail', '==', email), where('billingMigrated', '==', true), where('status', '==', 'Completed')];
+    if (isFieldRole(profile?.role)) return [where('assignedTechEmail', '==', email), where('billingMigrated', '==', true), where('status', '==', 'Completed')];
     if (profile?.role === 'client') return [where('clientEmail', '==', email), where('status', '==', 'Completed')];
     return [where('status', '==', 'Completed')];
   };
@@ -867,7 +871,7 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (profile?.role !== 'tech' || !profile.profilePhotoUrl || !firebaseUser?.uid) return;
+    if (!isFieldRole(profile?.role) || !profile.profilePhotoUrl || !firebaseUser?.uid) return;
     const mine = techs.find((t) => t.id === firebaseUser.uid);
     if (mine && mine.profilePhotoUrl !== profile.profilePhotoUrl) {
       updateDoc(doc(db, 'technicians', firebaseUser.uid), { profilePhotoUrl: profile.profilePhotoUrl }).catch((e) => console.warn('Tech photo sync failed', e));
@@ -1134,6 +1138,9 @@ function App() {
         role: newAccount.role,
         mustChangePassword: true,
       });
+      if (newAccount.role === 'client' || newAccount.role === 'tech') {
+        await sendEmailVerification(user).catch((err) => console.warn('Verification email failed', err.message));
+      }
 
       if (newAccount.role === 'tech') {
         await setDoc(doc(db, 'technicians', user.uid), {
@@ -1312,11 +1319,11 @@ function App() {
     try {
       await updateDoc(doc(db, 'users', userItem.id), { role: nextRole });
 
-      if (userItem.role === 'tech' && nextRole !== 'tech') {
+      if (isFieldRole(userItem.role) && !isFieldRole(nextRole)) {
         await deleteDoc(doc(db, 'technicians', userItem.id));
       }
 
-      if (userItem.role !== 'tech' && nextRole === 'tech') {
+      if (!isFieldRole(userItem.role) && isFieldRole(nextRole)) {
         await setDoc(doc(db, 'technicians', userItem.id), {
           uid: userItem.uid || userItem.id,
           name: userItem.displayName || userItem.email,
@@ -1348,7 +1355,7 @@ function App() {
     try {
       await deleteDoc(doc(db, 'users', userId));
       await deleteDoc(doc(db, 'badges', userId)).catch(() => {});
-      if (userRole === 'tech') {
+      if (isFieldRole(userRole)) {
         await deleteDoc(doc(db, 'technicians', userId));
       }
       setAccountMessage('User deleted successfully.');
@@ -1617,7 +1624,7 @@ function App() {
       const profilePhotoData = await fileToSquareDataUrl(file, 400);
       await updateDoc(doc(db, 'users', firebaseUser.uid), { profilePhotoUrl: url, profilePhotoData });
       setProfile((prev) => ({ ...prev, profilePhotoUrl: url, profilePhotoData }));
-      if (profile?.role === 'tech') {
+      if (isFieldRole(profile?.role)) {
         // Mirror to the technicians doc so clients can see the photo
         await updateDoc(doc(db, 'technicians', firebaseUser.uid), { profilePhotoUrl: url }).catch((e) => console.warn('Tech photo sync failed', e));
       }
@@ -1759,7 +1766,7 @@ function App() {
   const currentJobs = profile
     ? canStaffManage
       ? jobsWithPrivateData
-      : profile.role === 'tech'
+      : isFieldRole(profile.role)
         ? jobsWithPrivateData.filter((job) => job.assignedTechEmail === (profile.email || firebaseUser?.email))
         : jobsWithPrivateData.filter((job) => job.clientEmail === (profile.email || firebaseUser?.email))
     : [];
@@ -1889,6 +1896,56 @@ function App() {
                 </button>
               </div>
             )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if ((profile?.role === 'client' || isFieldRole(profile?.role)) && !firebaseUser?.emailVerified) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center p-4">
+        <div className="max-w-lg w-full bg-slate-900 border border-slate-700 rounded-3xl p-8 shadow-2xl text-center">
+          <h1 className="text-2xl font-bold">Verify your email</h1>
+          <p className="text-slate-400 mt-4">We sent a verification link to {firebaseUser?.email}. Open it, then continue. Your jobs appear after verification.</p>
+          {verifyMessage && <p className="text-amber-300 mt-4 text-sm">{verifyMessage}</p>}
+          <div className="mt-6 flex flex-col gap-3">
+            <button
+              onClick={async () => {
+                try {
+                  await firebaseUser.reload();
+                  await firebaseUser.getIdToken(true);
+                  if (firebaseUser.emailVerified) {
+                    window.location.reload();
+                  } else {
+                    setVerifyMessage('Not verified yet. Open the link in your email, then try again.');
+                  }
+                } catch (error) {
+                  console.error('Verification check failed', error);
+                  setVerifyMessage('Unable to check verification. Try again.');
+                }
+              }}
+              className="rounded-2xl bg-teal-600 px-4 py-3 text-white font-semibold hover:bg-teal-500 transition"
+            >
+              I've verified, continue
+            </button>
+            <button
+              onClick={async () => {
+                try {
+                  await sendEmailVerification(firebaseUser);
+                  setVerifyMessage('Verification email sent.');
+                } catch (error) {
+                  console.error('Resend verification failed', error);
+                  setVerifyMessage('Please wait a few minutes before requesting another email.');
+                }
+              }}
+              className="rounded-2xl border border-slate-600 bg-slate-800 px-4 py-3 text-slate-200 font-semibold hover:bg-slate-700 transition"
+            >
+              Resend verification email
+            </button>
+            <button onClick={logout} className="text-slate-400 text-sm hover:text-slate-200">
+              Sign out
+            </button>
           </div>
         </div>
       </div>
@@ -2307,6 +2364,7 @@ function App() {
                         <option value="admin">Admin</option>
                         <option value="adminAssistant">Admin Assistant</option>
                         <option value="tech">Technician</option>
+                        <option value="seniorConsultant">Senior Consultant</option>
                         <option value="client">Client</option>
                       </select>
 
@@ -2403,7 +2461,7 @@ function App() {
                 const total = calcInvoiceTotal(job.consumables || [], job.serviceFee);
                 const beforeReady = getJobPhotos(job, 'before').length > 0;
                 const afterReady = getJobPhotos(job, 'after').length > 0;
-                const canRequestSignoff = profile.role === 'tech' && ['Assigned', 'Dispatched', 'En Route', 'On Site'].includes(job.status) && beforeReady && afterReady && Boolean(job.checkInAt);
+                const canRequestSignoff = isFieldRole(profile.role) && ['Assigned', 'Dispatched', 'En Route', 'On Site'].includes(job.status) && beforeReady && afterReady && Boolean(job.checkInAt);
                 const canClientSignoff = profile.role === 'client' && job.status === 'Ready for Signoff' && !job.clientSignedOff;
 
                 const isExpanded = expandedJobIds.includes(job.id);
@@ -2835,7 +2893,7 @@ function App() {
                         {job.adminSignedOff && <div className="text-teal-300">Admin signed off{job.adminSignedOffAt ? ` � ${formatDate(job.adminSignedOffAt)}` : ''}</div>}
                       </div>
                       <div className="flex flex-wrap gap-3">
-                        {profile.role === 'tech' && !job.checkInAt && job.status !== 'En Route' && (
+                        {isFieldRole(profile.role) && !job.checkInAt && job.status !== 'En Route' && (
                           <button
                             onClick={() => updateDoc(doc(db, 'jobs', job.id), { status: 'En Route', statusUpdatedByRole: profile.role, enRouteAt: new Date(), updatedAt: new Date() })}
                             className="rounded-2xl bg-amber-600 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-500 transition flex items-center gap-2"
@@ -2843,7 +2901,7 @@ function App() {
                             <MapPin size={16} /> Start en route
                           </button>
                         )}
-                        {profile.role === 'tech' && !job.checkInAt && (
+                        {isFieldRole(profile.role) && !job.checkInAt && (
                           <button
                             onClick={() => recordTechGeoEvent(job, 'checkIn')}
                             disabled={geoEventBusyJobId === job.id}
@@ -2852,7 +2910,7 @@ function App() {
                             <MapPin size={16} /> {geoEventBusyJobId === job.id ? 'Checking in...' : 'Check in on site'}
                           </button>
                         )}
-                        {profile.role === 'tech' && job.checkInAt && !job.checkOutAt && (() => {
+                        {isFieldRole(profile.role) && job.checkInAt && !job.checkOutAt && (() => {
                           const hasActiveBreak = (job.breaks || []).some(b => b.startAt && !b.endAt);
                           const checkoutBlockReason = getCheckoutBlockReason(job);
                           return hasActiveBreak ? (
@@ -2893,7 +2951,7 @@ function App() {
                             Allow check-in from anywhere (remote job)
                           </label>
                         )}
-                        {profile.role === 'tech' && canRequestSignoff && (
+                        {isFieldRole(profile.role) && canRequestSignoff && (
                           <button onClick={() => requestClientSignoff(job)} className="rounded-2xl bg-orange-500 px-4 py-2 text-sm font-semibold text-white hover:bg-orange-400 transition flex items-center gap-2">
                             <FileText size={16} /> Request sign-off
                           </button>

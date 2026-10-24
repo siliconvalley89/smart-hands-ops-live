@@ -5,8 +5,11 @@ service cloud.firestore {
       return request.auth != null;
     }
 
+    // Falls back to the users doc until every account has a role claim; remove the fallback after backfill.
     function getUserRole() {
-      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role;
+      return 'role' in request.auth.token
+        ? request.auth.token.role
+        : get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role;
     }
 
     function isAdmin() {
@@ -18,11 +21,19 @@ service cloud.firestore {
     }
 
     function isTech() {
-      return isSignedIn() && getUserRole() == 'tech';
+      return isSignedIn() && getUserRole() in ['tech', 'seniorConsultant'];
     }
 
     function isClient() {
       return isSignedIn() && getUserRole() == 'client';
+    }
+
+    function isVerifiedTech() {
+      return isTech() && request.auth.token.email_verified == true;
+    }
+
+    function isVerifiedClient() {
+      return isClient() && request.auth.token.email_verified == true;
     }
 
     function jobHasNoEmbeddedBilling(job) {
@@ -35,8 +46,8 @@ service cloud.firestore {
       return jobHasNoEmbeddedBilling(job) && (
         isAdmin() ||
         (isAdminAssistant() && job.status != 'Completed') ||
-        (isClient() && job.clientEmail == request.auth.token.email) ||
-        (isTech() && job.assignedTechEmail == request.auth.token.email)
+        (isVerifiedClient() && job.clientEmail == request.auth.token.email) ||
+        (isVerifiedTech() && job.assignedTechEmail == request.auth.token.email)
       );
     }
 
@@ -44,7 +55,7 @@ service cloud.firestore {
       let job = get(/databases/$(database)/documents/jobs/$(jobId)).data;
       return jobHasNoEmbeddedBilling(job) &&
         job.get('invoiceSent', false) != true &&
-        (isAdmin() || (isTech() && job.assignedTechEmail == request.auth.token.email));
+        (isAdmin() || (isVerifiedTech() && job.assignedTechEmail == request.auth.token.email));
     }
 
     match /badges/{badgeId} {
@@ -91,8 +102,8 @@ service cloud.firestore {
       allow read: if isSignedIn() && (
         isAdmin() ||
         (isAdminAssistant() && resource.data.status != 'Completed' && resource.data.get('billingMigrated', false) == true) ||
-        (isClient() && resource.data.clientEmail == request.auth.token.email) ||
-        (isTech() &&
+        (isVerifiedClient() && resource.data.clientEmail == request.auth.token.email) ||
+        (isVerifiedTech() &&
           resource.data.assignedTechEmail == request.auth.token.email &&
           resource.data.get('billingMigrated', false) == true)
       );
@@ -112,7 +123,7 @@ service cloud.firestore {
             'afterPhotoUrl', 'clientSignedOff', 'createdAt', 'createdByRole'
           ]) &&
           request.resource.data.get('invoiceSent', false) == false) ||
-        (isClient() &&
+        (isVerifiedClient() &&
           request.resource.data.clientEmail == request.auth.token.email &&
           jobHasNoEmbeddedBilling(request.resource.data) &&
           request.resource.data.get('createdByRole', '') != 'admin' &&
@@ -134,7 +145,7 @@ service cloud.firestore {
             'assignedTechName', 'assignedTechEmail', 'assignedTechDistanceMiles',
             'assignedTechDistanceKm', 'status', 'statusUpdatedByRole', 'updatedAt'
           ])) ||
-        (isTech() &&
+        (isVerifiedTech() &&
           resource.data.assignedTechEmail == request.auth.token.email &&
           jobHasNoEmbeddedBilling(resource.data) &&
           request.resource.data.diff(resource.data).affectedKeys().hasOnly([
@@ -145,7 +156,7 @@ service cloud.firestore {
           ]) &&
           request.resource.data.status in ['Assigned', 'Dispatched', 'En Route', 'On Site', 'Ready for Signoff']) ||
         // Clients can only set clientSignedOff on their own jobs; no other fields
-        (isClient() && resource.data.clientEmail == request.auth.token.email &&
+        (isVerifiedClient() && resource.data.clientEmail == request.auth.token.email &&
           request.resource.data.diff(resource.data).affectedKeys().hasOnly(['clientSignedOff', 'status', 'statusUpdatedByRole', 'completedAt']))
       );
       allow delete: if isAdmin();
@@ -171,7 +182,7 @@ service cloud.firestore {
 
     match /jobBilling/{jobId} {
       allow read: if isAdmin() || (
-        isClient() &&
+        isVerifiedClient() &&
         get(/databases/$(database)/documents/jobs/$(jobId)).data.clientEmail == request.auth.token.email
       );
       allow create, update, delete: if isAdmin();
