@@ -353,13 +353,18 @@ function App() {
   }, [observedJobIdsKey, profile?.role, sessionRestoreCount, suppressAuthStateRef]);
 
   useEffect(() => {
+    if (!firebaseUser) return () => {};
     const q = query(collection(db, 'technicians'), orderBy('name', 'asc'));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const techItems = snapshot.docs.map((docItem) => ({ id: docItem.id, ...docItem.data() }));
-      setTechs(techItems);
-    });
+    const unsubscribe = onSnapshot(
+      q,
+      (snapshot) => {
+        const techItems = snapshot.docs.map((docItem) => ({ id: docItem.id, ...docItem.data() }));
+        setTechs(techItems);
+      },
+      (error) => console.error('Unable to load technicians', error),
+    );
     return () => unsubscribe();
-  }, []);
+  }, [firebaseUser]);
 
   useEffect(() => {
     if (!isFieldRole(profile?.role) || !profile.profilePhotoUrl || !firebaseUser?.uid) return;
