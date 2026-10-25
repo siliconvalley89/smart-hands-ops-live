@@ -196,6 +196,17 @@ describe('jobs', () => {
     await assertFails(updateDoc(doc(as.tech(), 'jobs/job-open'), { serviceFee: 1, updatedBy: TECH }));
   });
 
+  it('tech cannot edit a completed or invoiced job', async () => {
+    await assertFails(updateDoc(doc(as.tech(), 'jobs/job-done'), { status: 'Completed', updatedBy: TECH, updatedAt: new Date() }));
+    await assertFails(updateDoc(doc(as.tech(), 'jobs/job-invoiced'), { status: 'En Route', updatedBy: TECH, updatedAt: new Date() }));
+    await assertFails(updateDoc(doc(as.tech(), 'jobs/job-invoiced'), { checkOutAt: new Date(), updatedBy: TECH, updatedAt: new Date() }));
+  });
+
+  it('tech can only record check-in as themself', async () => {
+    await assertSucceeds(updateDoc(doc(as.tech(), 'jobs/job-onsite'), { checkInTechEmail: TECH, checkInTechName: 'Tia', updatedBy: TECH, updatedAt: new Date() }));
+    await assertFails(updateDoc(doc(as.tech(), 'jobs/job-onsite'), { checkInTechEmail: SENIOR, checkInTechName: 'Sam', updatedBy: TECH, updatedAt: new Date() }));
+  });
+
   it('assistant can reassign a tech on an open job but not close it', async () => {
     await assertSucceeds(updateDoc(doc(as.assistant(), 'jobs/job-open'), {
       assignedTechEmail: SENIOR, assignedTechName: 'Sam', updatedBy: ASSISTANT, updatedAt: new Date(),
@@ -407,6 +418,7 @@ describe('payments', () => {
   it('rejects invalid payment payloads', async () => {
     const db = as.admin();
     await assertFails(setDoc(doc(db, 'jobs/job-open/payments/p-a'), newPayment({ amount: 0 })));
+    await assertFails(setDoc(doc(db, 'jobs/job-open/payments/p-f'), newPayment({ amount: -5 })));
     await assertFails(setDoc(doc(db, 'jobs/job-open/payments/p-b'), newPayment({ method: 'bitcoin' })));
     await assertFails(setDoc(doc(db, 'jobs/job-open/payments/p-c'), newPayment({ recordedBy: OTHER_CLIENT })));
     await assertFails(setDoc(doc(db, 'jobs/job-open/payments/p-d'), newPayment({ voided: true })));
@@ -464,9 +476,10 @@ describe('billing documents', () => {
     await assertFails(setDoc(doc(as.client(), 'jobBilling/job-open'), { total: 1 }));
   });
 
-  it('invoiceBilling: any client reads company details, only admin writes', async () => {
-    await assertSucceeds(getDoc(doc(as.client(), 'invoiceBilling/invoice_details')));
+  it('invoiceBilling: only admin reads or writes company billing details', async () => {
     await assertSucceeds(getDoc(doc(as.admin(), 'invoiceBilling/invoice_details')));
+    await assertFails(getDoc(doc(as.client(), 'invoiceBilling/invoice_details')));
+    await assertFails(getDoc(doc(as.assistant(), 'invoiceBilling/invoice_details')));
     await assertFails(getDoc(doc(as.anon(), 'invoiceBilling/invoice_details')));
     await assertFails(setDoc(doc(as.client(), 'invoiceBilling/invoice_details'), { companyName: 'x' }));
     await assertSucceeds(setDoc(doc(as.admin(), 'invoiceBilling/invoice_details'), { companyName: 'Silicon Valley Smart Hands LLC' }));
@@ -509,11 +522,14 @@ describe('technicians and badges', () => {
     await assertFails(updateDoc(doc(as.assistant(), 'technicians/tech-uid'), { profilePhotoUrl: 'https://x/y.jpg' }));
   });
 
-  it('badges: tech writes own badge, client cannot, anyone reads', async () => {
+  it('badges: anyone reads one badge by id, only admin lists them, owners write their own', async () => {
+    await assertSucceeds(getDoc(doc(as.anon(), 'badges/tech-uid')));
+    await assertFails(getDocs(collection(as.anon(), 'badges')));
+    await assertFails(getDocs(collection(as.tech(), 'badges')));
+    await assertSucceeds(getDocs(collection(as.admin(), 'badges')));
     await assertSucceeds(setDoc(doc(as.tech(), 'badges/tech-uid'), { role: 'tech' }));
     await assertFails(setDoc(doc(as.client(), 'badges/client-uid'), { role: 'client' }));
     await assertFails(setDoc(doc(as.tech(), 'badges/other-uid'), { role: 'tech' }));
-    await assertSucceeds(getDoc(doc(as.anon(), 'badges/tech-uid')));
   });
 });
 

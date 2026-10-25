@@ -510,6 +510,7 @@ exports.manageTechStatusOnJobUpdated = onDocumentUpdated(
 // ── Receivables: client reminders on day 1, 7 and 14 past due, plus a daily admin digest ──
 const DAY_MS = 24 * 60 * 60 * 1000;
 const NET_TERMS_DAYS = 30;
+const REMINDER_PAGE_SIZE = 200;
 const REMINDER_STAGES = [
   { afterDays: 1, message: 'Your invoice is past due. Please submit payment using the bank details on your invoice.' },
   { afterDays: 7, message: 'Your invoice is now 7 days past due. Please submit payment as soon as possible.' },
@@ -541,6 +542,7 @@ exports.sendPaymentReminders = onSchedule(
   {
     schedule: '15 9 * * *',
     timeZone: 'America/Los_Angeles',
+    timeoutSeconds: 540,
     secrets: [emailjsServiceId, emailjsTemplateId, emailjsPublicKey, emailjsPrivateKey],
   },
   async () => {
@@ -552,41 +554,52 @@ exports.sendPaymentReminders = onSchedule(
     const privateKey = emailjsPrivateKey.value().trim();
 
     const cutoff = admin.firestore.Timestamp.fromMillis(now - NET_TERMS_DAYS * DAY_MS);
-    const signedOffSnap = await db.collection('jobs').where('adminSignedOffAt', '<', cutoff).get();
-
     const overdue = [];
-    for (const jobDoc of signedOffSnap.docs) {
-      const job = jobDoc.data();
-      if (job.invoiceSent !== true) continue;
+    let lastDoc = null;
+    for (;;) {
+      let pageQuery = db.collection('jobs')
+        .where('adminSignedOffAt', '<', cutoff)
+        .orderBy('adminSignedOffAt')
+        .limit(REMINDER_PAGE_SIZE);
+      if (lastDoc) pageQuery = pageQuery.startAfter(lastDoc);
+      const page = await pageQuery.get();
 
-      const { billing, balance } = await getInvoiceBalance(jobDoc.id);
-      if (balance <= 0) continue;
+      for (const jobDoc of page.docs) {
+        const job = jobDoc.data();
+        if (job.invoiceSent !== true) continue;
 
-      const dueMs = job.adminSignedOffAt.toMillis() + NET_TERMS_DAYS * DAY_MS;
-      const daysOverdue = Math.floor((now - dueMs) / DAY_MS);
-      overdue.push({ jobId: jobDoc.id, job, balance, daysOverdue });
+        const { billing, balance } = await getInvoiceBalance(jobDoc.id);
+        if (balance <= 0) continue;
 
-      const stageNumber = reminderStageFor(daysOverdue, REMINDER_STAGES);
-      if (stageNumber <= (billing.paymentReminderStage || 0) || !job.clientEmail) continue;
+        const dueMs = job.adminSignedOffAt.toMillis() + NET_TERMS_DAYS * DAY_MS;
+        const daysOverdue = Math.floor((now - dueMs) / DAY_MS);
+        overdue.push({ jobId: jobDoc.id, job, balance, daysOverdue });
 
-      try {
-        await sendEmailJs(serviceId, templateId, publicKey, privateKey, {
-          to_email:       job.clientEmail,
-          to_name:        job.client || 'Valued Customer',
-          job_status:     'Payment reminder',
-          job_task:       job.task || '',
-          job_location:   job.location || '',
-          tech_name:      '',
-          status_message: `${REMINDER_STAGES[stageNumber - 1].message} Balance due: $${balance.toFixed(2)}.`,
-          job_id:         jobDoc.id,
-        });
-        await db.collection('jobBilling').doc(jobDoc.id).set({
-          paymentReminderStage: stageNumber,
-          paymentRemindedAt: new Date(),
-        }, { merge: true });
-      } catch (err) {
-        console.error(`Payment reminder failed for job ${jobDoc.id}:`, err.message);
+        const stageNumber = reminderStageFor(daysOverdue, REMINDER_STAGES);
+        if (stageNumber <= (billing.paymentReminderStage || 0) || !job.clientEmail) continue;
+
+        try {
+          await sendEmailJs(serviceId, templateId, publicKey, privateKey, {
+            to_email:       job.clientEmail,
+            to_name:        job.client || 'Valued Customer',
+            job_status:     'Payment reminder',
+            job_task:       job.task || '',
+            job_location:   job.location || '',
+            tech_name:      '',
+            status_message: `${REMINDER_STAGES[stageNumber - 1].message} Balance due: $${balance.toFixed(2)}.`,
+            job_id:         jobDoc.id,
+          });
+          await db.collection('jobBilling').doc(jobDoc.id).set({
+            paymentReminderStage: stageNumber,
+            paymentRemindedAt: new Date(),
+          }, { merge: true });
+        } catch (err) {
+          console.error(`Payment reminder failed for job ${jobDoc.id}:`, err.message);
+        }
       }
+
+      if (page.size < REMINDER_PAGE_SIZE) break;
+      lastDoc = page.docs[page.docs.length - 1];
     }
 
     if (overdue.length === 0) return;
@@ -692,6 +705,39 @@ exports.resendInvoiceEmail = onCall(
     return { sentTo: job.clientEmail };
   },
 );
+
+// Returns the saved invoice PDF to the admin or the job's own client; clients never read invoiceBilling
+exports.getInvoicePdf = onCall(async (request) => {
+  const token = request.auth?.token;
+  const jobId = request.data?.jobId;
+  if (!jobId) throw new HttpsError('invalid-argument', 'Missing job.');
+  const snap = await admin.firestore().collection('jobs').doc(jobId).get();
+  if (!snap.exists) throw new HttpsError('not-found', 'Job not found.');
+  const job = snap.data();
+  const isOwnerClient = token?.role === 'client' && token.email_verified === true && job.clientEmail === token.email;
+  if (token?.role !== 'admin' && !isOwnerClient) throw new HttpsError('permission-denied', 'You cannot access this invoice.');
+  if (!job.adminSignedOff || !job.invoicePdfPath) throw new HttpsError('failed-precondition', 'This invoice is not available yet.');
+  const [pdfBytes] = await admin.storage().bucket().file(job.invoicePdfPath).download();
+  return { base64: pdfBytes.toString('base64') };
+});
+
+// Removes the login account and its staff records; admins only, never their own account
+exports.deleteStaffAccount = onCall(async (request) => {
+  if (request.auth?.token?.role !== 'admin') throw new HttpsError('permission-denied', 'Only admins can delete accounts.');
+  const uid = request.data?.uid;
+  if (!uid || typeof uid !== 'string') throw new HttpsError('invalid-argument', 'Missing user.');
+  if (uid === request.auth.uid) throw new HttpsError('failed-precondition', 'You cannot delete your own account.');
+  await admin.auth().deleteUser(uid).catch((err) => {
+    if (err.code !== 'auth/user-not-found') throw err;
+  });
+  const db = admin.firestore();
+  await Promise.all([
+    db.collection('users').doc(uid).delete(),
+    db.collection('technicians').doc(uid).delete(),
+    db.collection('badges').doc(uid).delete(),
+  ]);
+  return { deleted: true };
+});
 
 // Emails the client when staff send a quote; the client accepts it in the app
 exports.sendQuoteEmailOnSend = onDocumentUpdated(

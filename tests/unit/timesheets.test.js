@@ -42,6 +42,27 @@ describe('buildTimesheetRows', () => {
     ]);
     expect(rows.map((row) => row.jobId)).toEqual(['early', 'late']);
   });
+
+  it('attributes time to the tech who checked in, falling back to the assigned tech', () => {
+    const [checkedIn, legacy] = buildTimesheetRows([
+      {
+        id: 'job-6',
+        assignedTechName: 'Reassigned Rita',
+        assignedTechEmail: 'rita@example.com',
+        checkInTechName: 'Ana',
+        checkInTechEmail: 'ana@example.com',
+        checkInAt: at('2026-10-20T16:00:00Z'),
+      },
+      {
+        id: 'job-7',
+        assignedTechName: 'Ben',
+        assignedTechEmail: 'ben@example.com',
+        checkInAt: at('2026-10-21T16:00:00Z'),
+      },
+    ]);
+    expect(checkedIn).toMatchObject({ techName: 'Ana', techEmail: 'ana@example.com' });
+    expect(legacy).toMatchObject({ techName: 'Ben', techEmail: 'ben@example.com' });
+  });
 });
 
 describe('timesheetCsvRows', () => {

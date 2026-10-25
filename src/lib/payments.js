@@ -1,4 +1,4 @@
-import { addDoc, collection, doc, updateDoc } from 'firebase/firestore';
+import { addDoc, collection, doc, serverTimestamp, updateDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { NET_TERMS_DAYS } from './invoice';
 import { calcInvoiceTotal } from './invoiceTotals';
@@ -58,16 +58,19 @@ export const getAgingBucket = (daysOverdue) => {
   return '61+';
 };
 
-export const recordPayment = (jobId, { amount, method, reference, receivedAt, recordedBy }) =>
-  addDoc(collection(db, 'jobs', jobId, 'payments'), {
-    amount: Number(amount),
+export const recordPayment = (jobId, { amount, method, reference, receivedAt, recordedBy }) => {
+  const cents = Math.round(Number(amount) * 100);
+  if (!Number.isFinite(cents) || cents <= 0) throw new Error('Payment amount must be greater than zero.');
+  return addDoc(collection(db, 'jobs', jobId, 'payments'), {
+    amount: cents / 100,
     method,
     reference: reference || '',
     receivedAt,
-    recordedAt: new Date(),
+    recordedAt: serverTimestamp(),
     recordedBy,
     voided: false,
   });
+};
 
 export const voidPayment = (jobId, paymentId, { reason, voidedBy }) =>
   updateDoc(doc(db, 'jobs', jobId, 'payments', paymentId), {

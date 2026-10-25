@@ -517,6 +517,8 @@ function App() {
         payload.checkInAt = new Date();
         payload.checkInLat = coords.lat;
         payload.checkInLng = coords.lng;
+        payload.checkInTechEmail = job.assignedTechEmail || '';
+        payload.checkInTechName = job.assignedTechName || '';
         payload.status = 'On Site';
         payload.statusUpdatedByRole = profile.role;
       }
@@ -587,7 +589,7 @@ function App() {
     }
   };
 
-  const deleteUser = async (userId, userRole) => {
+  const deleteUser = async (userId) => {
     if (userId === (profile?.uid || profile?.id)) {
       setAccountMessage('You cannot delete your own admin account from this panel.');
       return;
@@ -596,11 +598,7 @@ function App() {
       return;
     }
     try {
-      await deleteDoc(doc(db, 'users', userId));
-      await deleteDoc(doc(db, 'badges', userId)).catch(() => {});
-      if (isFieldRole(userRole)) {
-        await deleteDoc(doc(db, 'technicians', userId));
-      }
+      await httpsCallable(functions, 'deleteStaffAccount')({ uid: userId });
       setAccountMessage('User deleted successfully.');
       setTimeout(() => setAccountMessage(''), 3000);
     } catch (error) {

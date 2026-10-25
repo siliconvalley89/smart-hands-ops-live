@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import { db, auth } from '../firebase';
 import { Wrench, Clock, MapPin, Trash2, List, CheckCircle, Plus, FileText, Shield, Download } from 'lucide-react';
 import { formatSchedule, getJobStatusLabel } from '../lib/jobTime';
-import { generateInvoicePdf } from '../lib/invoice';
+import { downloadInvoice } from '../lib/invoice';
 import { calcInvoiceTotal } from '../lib/invoiceTotals';
 import { getReceivableStatus } from '../lib/payments';
 import { isFieldRole } from '../lib/roles';
@@ -432,7 +432,7 @@ export default function ActiveJobs({
                         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-end">
                           {job.status !== 'Pending' && (
                             profile.role === 'admin' || job.adminSignedOff ? (
-                              <button onClick={() => generateInvoicePdf(job, setAppError)} className="rounded-2xl bg-teal-600 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-500 transition">
+                              <button onClick={() => downloadInvoice(job, profile.role, setAppError)} className="rounded-2xl bg-teal-600 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-500 transition">
                                 Download invoice
                               </button>
                             ) : null

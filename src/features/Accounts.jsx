@@ -169,7 +169,7 @@ export default function Accounts({
 
                 <button
                   type="button"
-                  onClick={() => deleteUser(userItem.id, userItem.role)}
+                  onClick={() => deleteUser(userItem.id)}
                   disabled={userItem.id === (profile?.uid || profile?.id)}
                   className="rounded-2xl bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-500 disabled:opacity-50 disabled:cursor-not-allowed"
                 >

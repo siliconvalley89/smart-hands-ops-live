@@ -21,10 +21,13 @@ const MIN_BLOCK_PX = 24;
 
 const timeLabel = (ms) => new Date(ms).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
 const dayLabel = (day) => day.toLocaleDateString('en-US', { weekday: 'short', month: 'numeric', day: 'numeric' });
+const pad = (value) => String(value).padStart(2, '0');
 
 export default function SchedulingBoard({ activeJobs, techs, onMoveJob }) {
   const [anchor, setAnchor] = useState(() => new Date());
   const [showGrid, setShowGrid] = useState(true);
+  const [moveDraft, setMoveDraft] = useState(null);
+  const [moveError, setMoveError] = useState('');
   const dragRef = useRef(null);
   const days = getWeekDays(anchor);
   const todayString = new Date().toDateString();
@@ -71,12 +74,46 @@ export default function SchedulingBoard({ activeJobs, techs, onMoveJob }) {
     onMoveJob(job, { techEmail: rowKey, startMs: minuteOfDayToMs(day, clamped) });
   };
 
+  const openMove = (job) => {
+    const win = getJobWindow(job);
+    const start = win ? new Date(win.start) : null;
+    const dayIndex = start ? days.findIndex((day) => day.toDateString() === start.toDateString()) : -1;
+    setMoveDraft({
+      job,
+      techEmail: job.assignedTechEmail || techRows[0]?.key || '',
+      dayIndex: dayIndex >= 0 ? dayIndex : 0,
+      time: start ? `${pad(start.getHours())}:${pad(start.getMinutes())}` : '08:00',
+    });
+    setMoveError('');
+  };
+
+  const closeMove = () => {
+    setMoveDraft(null);
+    setMoveError('');
+  };
+
+  const submitMove = (e) => {
+    e.preventDefault();
+    const [hours, minutes] = moveDraft.time.split(':').map(Number);
+    const minute = hours * 60 + minutes;
+    if (!Number.isFinite(minute) || minute < BOARD_START_MINUTE || minute > BOARD_END_MINUTE - 30) {
+      setMoveError('Choose a start time between 6:00 AM and 9:30 PM.');
+      return;
+    }
+    if (!moveDraft.techEmail) {
+      setMoveError('Choose a tech.');
+      return;
+    }
+    onMoveJob(moveDraft.job, { techEmail: moveDraft.techEmail, startMs: minuteOfDayToMs(days[moveDraft.dayIndex], minute) });
+    closeMove();
+  };
+
   return (
     <section className="grid gap-4">
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-3xl bg-slate-800 border border-slate-700 p-4">
         <div>
           <h2 className="text-xl font-semibold text-white">Schedule</h2>
-          <p className="text-slate-400 text-sm mt-1">Drag an open job to change its time, its tech, or both.</p>
+          <p className="text-slate-400 text-sm mt-1">Drag an open job, or tap it and choose Move, to change its time, its tech, or both.</p>
         </div>
         <div className="flex items-center gap-2 text-sm">
           <button type="button" onClick={() => shiftWeeks(-1)} className="rounded-2xl border border-slate-600 px-3 py-2 text-slate-200 hover:bg-slate-700 transition">Prev</button>
@@ -88,6 +125,49 @@ export default function SchedulingBoard({ activeJobs, techs, onMoveJob }) {
           </span>
         </div>
       </div>
+
+      {moveDraft && (
+        <form onSubmit={submitMove} className="grid gap-3 rounded-3xl border border-teal-700 bg-slate-900 p-4 sm:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_200px_160px_140px_auto] xl:items-end">
+          <div className="min-w-0">
+            <div className="text-xs uppercase tracking-[0.2em] text-slate-400">Moving</div>
+            <div className="font-semibold text-white truncate">{moveDraft.job.client || 'Job'}{moveDraft.job.task ? ` · ${moveDraft.job.task}` : ''}</div>
+          </div>
+          <label className="grid gap-1 text-xs text-slate-400">
+            Tech
+            <select
+              value={moveDraft.techEmail}
+              onChange={(e) => setMoveDraft((prev) => ({ ...prev, techEmail: e.target.value }))}
+              className="rounded-2xl bg-slate-800 border border-slate-600 px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-teal-500"
+            >
+              {techRows.map((row) => <option key={row.key} value={row.key}>{row.tech.name || row.key}</option>)}
+            </select>
+          </label>
+          <label className="grid gap-1 text-xs text-slate-400">
+            Day
+            <select
+              value={moveDraft.dayIndex}
+              onChange={(e) => setMoveDraft((prev) => ({ ...prev, dayIndex: Number(e.target.value) }))}
+              className="rounded-2xl bg-slate-800 border border-slate-600 px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-teal-500"
+            >
+              {days.map((day, index) => <option key={day.getTime()} value={index}>{dayLabel(day)}</option>)}
+            </select>
+          </label>
+          <label className="grid gap-1 text-xs text-slate-400">
+            Start
+            <input
+              type="time"
+              value={moveDraft.time}
+              onChange={(e) => setMoveDraft((prev) => ({ ...prev, time: e.target.value }))}
+              className="rounded-2xl bg-slate-800 border border-slate-600 px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-teal-500"
+            />
+          </label>
+          <div className="flex gap-2">
+            <button type="submit" className="rounded-2xl bg-teal-600 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-500 transition">Move job</button>
+            <button type="button" onClick={closeMove} className="rounded-2xl border border-slate-600 px-4 py-2 text-sm text-slate-200 hover:bg-slate-700 transition">Cancel</button>
+          </div>
+          {moveError && <p className="text-sm text-red-300 sm:col-span-2 xl:col-span-5">{moveError}</p>}
+        </form>
+      )}
 
       <div className={`grid gap-4 ${showGrid ? 'xl:grid-cols-[minmax(0,1fr)_260px]' : ''}`}>
         {showGrid && (
@@ -128,7 +208,11 @@ export default function SchedulingBoard({ activeJobs, techs, onMoveJob }) {
                             key={`${job.id}-${day.getTime()}`}
                             draggable={movable}
                             onDragStart={movable ? (e) => startDrag(e, job) : undefined}
-                            title={movable ? 'Drag to reschedule' : `${job.status} jobs cannot be moved`}
+                            onClick={movable ? () => openMove(job) : undefined}
+                            onKeyDown={movable ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openMove(job); } } : undefined}
+                            role={movable ? 'button' : undefined}
+                            tabIndex={movable ? 0 : undefined}
+                            title={movable ? 'Drag to reschedule, or click to move' : `${job.status} jobs cannot be moved`}
                             className={`absolute left-1 right-1 overflow-hidden rounded-xl border px-2 py-1 text-xs ${movable ? 'cursor-grab active:cursor-grabbing' : 'cursor-default opacity-75'} ${conflicted ? 'border-red-500 bg-red-950/60' : 'border-teal-600 bg-teal-950/60'}`}
                             style={{ top: place.top, height: Math.max(place.height, MIN_BLOCK_PX) }}
                           >
@@ -148,7 +232,7 @@ export default function SchedulingBoard({ activeJobs, techs, onMoveJob }) {
 
         <aside className="rounded-3xl border border-slate-700 bg-slate-900/70 p-4">
           <h3 className="text-sm font-semibold text-white">Unscheduled assigned jobs</h3>
-          <p className="text-xs text-slate-400 mt-1 mb-3">Drag a job onto a tech's day to set its time.</p>
+          <p className="text-xs text-slate-400 mt-1 mb-3">Drag a job onto a tech's day, or choose Move, to set its time.</p>
           {tray.length === 0 ? (
             <p className="text-sm text-slate-500">Nothing waiting.</p>
           ) : (
@@ -165,6 +249,14 @@ export default function SchedulingBoard({ activeJobs, techs, onMoveJob }) {
                     <div className="font-semibold text-white truncate">{job.client || 'Job'}</div>
                     <div className="text-slate-300 truncate">{job.task}</div>
                     <div className="text-slate-400 truncate">{job.assignedTechName}</div>
+                    <button
+                      type="button"
+                      disabled={!movable}
+                      onClick={() => openMove(job)}
+                      className="mt-2 rounded-xl border border-slate-600 px-3 py-1 text-xs text-slate-200 hover:bg-slate-700 transition disabled:opacity-50"
+                    >
+                      Move
+                    </button>
                   </div>
                 );
               })}

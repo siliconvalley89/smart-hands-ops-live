@@ -3,7 +3,7 @@ import { Mail, Shield, Trash2 } from 'lucide-react';
 import TechNameWithPhoto from './TechNameWithPhoto';
 import CompletedJobPhotos from './CompletedJobPhotos';
 import { formatDate, getPhotoCount } from '../lib/jobDisplay';
-import { generateInvoicePdf } from '../lib/invoice';
+import { downloadInvoice } from '../lib/invoice';
 import { calcInvoiceTotal } from '../lib/invoiceTotals';
 import { getReceivableStatus } from '../lib/payments';
 
@@ -118,7 +118,7 @@ export default function CompletedJobs({
                         );
                       })()}
                       {(profile.role === 'admin' || job.adminSignedOff) && (
-                        <button onClick={() => generateInvoicePdf(job, setAppError)} className="mt-2 rounded-2xl bg-teal-600 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-500 transition">
+                        <button onClick={() => downloadInvoice(job, profile.role, setAppError)} className="mt-2 rounded-2xl bg-teal-600 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-500 transition">
                           Download invoice
                         </button>
                       )}

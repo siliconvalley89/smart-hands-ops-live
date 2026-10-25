@@ -1,6 +1,7 @@
 import { doc, getDoc, updateDoc } from 'firebase/firestore';
 import { ref, uploadBytes } from 'firebase/storage';
-import { db, storage, auth } from '../firebase';
+import { httpsCallable } from 'firebase/functions';
+import { db, storage, auth, functions } from '../firebase';
 import logoPath from '../assets/sv-smart-dispatch-logo.jpg';
 import { loadImageDataUrl } from './media';
 import { BUSINESS_NAME } from './branding';
@@ -187,6 +188,23 @@ export const uploadInvoicePdf = async (job, signedOffAt) => {
   const path = invoiceStoragePath(job.id);
   await uploadBytes(ref(storage, path), pdf.output('blob'), { contentType: 'application/pdf' });
   return path;
+};
+
+export const downloadInvoice = async (job, role, onError) => {
+  if (role === 'admin') return generateInvoicePdf(job, onError);
+  try {
+    const { data } = await httpsCallable(functions, 'getInvoicePdf')({ jobId: job.id });
+    const bytes = Uint8Array.from(atob(data.base64), (char) => char.charCodeAt(0));
+    const url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `SV-Smart-Dispatch-Invoice-${job.id}.pdf`;
+    link.click();
+    URL.revokeObjectURL(url);
+  } catch (error) {
+    console.error('Invoice download failed', error);
+    onError('Unable to download invoice. Please try again.');
+  }
 };
 
 export const generateInvoicePdf = async (job, onError) => {

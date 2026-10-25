@@ -33,8 +33,8 @@ export const buildTimesheetRows = (jobs) => jobs
     if (breaks.some((brk) => toMillis(brk.startAt) != null && toMillis(brk.endAt) == null)) flags.push('Open break');
     return {
       date: new Date(checkIn).toLocaleDateString('en-CA'),
-      techName: job.assignedTechName || '',
-      techEmail: job.assignedTechEmail || '',
+      techName: job.checkInTechName || job.assignedTechName || '',
+      techEmail: job.checkInTechEmail || job.assignedTechEmail || '',
       jobId: job.id,
       client: job.client || '',
       task: job.task || '',

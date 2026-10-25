@@ -85,7 +85,8 @@ service cloud.firestore {
     }
 
     match /badges/{badgeId} {
-      allow read: if true;
+      allow get: if true;
+      allow list: if isAdmin();
       allow create, update: if isSignedIn() && request.auth.uid == badgeId && !isClient();
       allow delete: if isAdmin();
     }
@@ -179,13 +180,17 @@ service cloud.firestore {
             resource.data.status in ['Pending', 'Assigned', 'Dispatched'])) ||
         (isVerifiedTech() &&
           resource.data.assignedTechEmail == request.auth.token.email &&
+          resource.data.status != 'Completed' &&
+          resource.data.get('invoiceSent', false) != true &&
           jobHasNoEmbeddedBilling(resource.data) &&
           request.resource.data.diff(resource.data).affectedKeys().hasOnly([
             'status', 'statusUpdatedByRole', 'enRouteAt', 'updatedAt', 'updatedBy',
-            'checkInAt', 'checkInLat', 'checkInLng',
+            'checkInAt', 'checkInLat', 'checkInLng', 'checkInTechEmail', 'checkInTechName',
             'checkOutAt', 'checkOutLat', 'checkOutLng',
             'breaks', 'signoffRequestedAt'
           ]) &&
+          (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['checkInTechEmail', 'checkInTechName']) ||
+            request.resource.data.get('checkInTechEmail', '') == request.auth.token.email) &&
           request.resource.data.get('updatedBy', '') == request.auth.token.email &&
           request.resource.data.status in ['Assigned', 'Dispatched', 'En Route', 'On Site', 'Ready for Signoff'] &&
           breakChangeAllowed()) ||
@@ -353,7 +358,7 @@ service cloud.firestore {
     }
 
     match /invoiceBilling/{docId} {
-      allow read: if isAdmin() || isClient();
+      allow read: if isAdmin();
       allow write: if isAdmin();
     }
 
