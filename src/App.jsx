@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { db, storage, auth } from './firebase';
+import { db, storage, auth, functions } from './firebase';
+import { httpsCallable } from 'firebase/functions';
 import { collection, addDoc, deleteDoc, doc, updateDoc, getDoc, setDoc, writeBatch } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import {
@@ -943,6 +944,24 @@ function App() {
     }
   };
 
+  const resendInvoiceEmail = async (job) => {
+    try {
+      await uploadInvoicePdf(job, job.adminSignedOffAt.toDate());
+    } catch (error) {
+      console.error('Invoice PDF regeneration failed', error);
+      setAppError('Unable to regenerate invoice PDF.');
+      return false;
+    }
+    try {
+      await httpsCallable(functions, 'resendInvoiceEmail')({ jobId: job.id });
+      return true;
+    } catch (error) {
+      console.error('Resend invoice email failed', error);
+      setAppError(error.message || 'Unable to resend invoice email.');
+      return false;
+    }
+  };
+
   const buildAssignmentUpdates = (job, tech) => {
     const distanceMiles = job.lat != null && job.lng != null && tech.lat != null && tech.lng != null
       ? calculateDistanceMiles(job.lat, job.lng, tech.lat, tech.lng)
@@ -1518,6 +1537,8 @@ function App() {
             downloadPhotos={downloadPhotos}
             setAppError={setAppError}
             adminSignOffWork={adminSignOffWork}
+            resendInvoiceEmail={resendInvoiceEmail}
+            askConfirm={askConfirm}
             handleDelete={handleDelete}
           />
         )}

@@ -619,7 +619,47 @@ exports.sendPaymentReminders = onSchedule(
   },
 );
 
-// Emails the signed-off invoice to the client; retries link-only if EmailJS rejects the PDF attachment
+// Emails the job's saved invoice PDF to the client; retries link-only if EmailJS rejects the attachment
+async function sendInvoiceEmail(jobId, job) {
+  const serviceId = emailjsServiceId.value().trim();
+  const templateId = emailjsInvoiceTemplateId.value().trim();
+  const publicKey = emailjsPublicKey.value().trim();
+  const privateKey = emailjsPrivateKey.value().trim();
+
+  const [[pdfBytes], { balance }] = await Promise.all([
+    admin.storage().bucket().file(job.invoicePdfPath).download(),
+    getInvoiceBalance(jobId),
+  ]);
+  const templateParams = {
+    to_email:         job.clientEmail,
+    to_name:          job.client || 'Valued Customer',
+    job_id:           jobId,
+    amount_due:       `$${balance.toFixed(2)}`,
+    invoice_link:     'https://smart-hands-live.web.app',
+    invoice_filename: `SV-Smart-Dispatch-Invoice-${jobId}.pdf`,
+  };
+
+  const billingRef = admin.firestore().collection('jobBilling').doc(jobId);
+  let sentWith = 'attachment';
+  try {
+    await sendEmailJs(serviceId, templateId, publicKey, privateKey, {
+      ...templateParams,
+      invoice_pdf: pdfBytes.toString('base64'),
+    });
+  } catch (err) {
+    console.error(`Invoice email with attachment failed for job ${jobId}, sending link only:`, err.message);
+    sentWith = 'link';
+    try {
+      await sendEmailJs(serviceId, templateId, publicKey, privateKey, templateParams);
+    } catch (linkErr) {
+      console.error(`Invoice email failed for job ${jobId}:`, linkErr.message);
+      await billingRef.set({ invoiceEmailError: linkErr.message, invoiceEmailAttemptedAt: new Date() }, { merge: true });
+      throw linkErr;
+    }
+  }
+  await billingRef.set({ invoiceEmailSentAt: new Date(), invoiceEmailSentWith: sentWith }, { merge: true });
+}
+
 exports.sendInvoiceEmailOnSignOff = onDocumentUpdated(
   {
     document: 'jobs/{jobId}',
@@ -629,45 +669,27 @@ exports.sendInvoiceEmailOnSignOff = onDocumentUpdated(
     const before = event.data.before.data();
     const after = event.data.after.data();
     if (!after.invoicePdfPath || after.invoicePdfPath === before.invoicePdfPath || !after.clientEmail) return;
+    await sendInvoiceEmail(event.params.jobId, after).catch(() => {});
+  },
+);
 
-    const jobId = event.params.jobId;
-    const serviceId = emailjsServiceId.value().trim();
-    const templateId = emailjsInvoiceTemplateId.value().trim();
-    const publicKey = emailjsPublicKey.value().trim();
-    const privateKey = emailjsPrivateKey.value().trim();
-
-    const [[pdfBytes], { balance }] = await Promise.all([
-      admin.storage().bucket().file(after.invoicePdfPath).download(),
-      getInvoiceBalance(jobId),
-    ]);
-    const templateParams = {
-      to_email:         after.clientEmail,
-      to_name:          after.client || 'Valued Customer',
-      job_id:           jobId,
-      amount_due:       `$${balance.toFixed(2)}`,
-      invoice_link:     'https://smart-hands-live.web.app',
-      invoice_filename: `SV-Smart-Dispatch-Invoice-${jobId}.pdf`,
-    };
-
-    const billingRef = admin.firestore().collection('jobBilling').doc(jobId);
-    let sentWith = 'attachment';
+exports.resendInvoiceEmail = onCall(
+  { secrets: [emailjsServiceId, emailjsInvoiceTemplateId, emailjsPublicKey, emailjsPrivateKey] },
+  async (request) => {
+    if (request.auth?.token?.role !== 'admin') throw new HttpsError('permission-denied', 'Only admins can resend invoices.');
+    const jobId = request.data?.jobId;
+    if (!jobId) throw new HttpsError('invalid-argument', 'Missing job.');
+    const snap = await admin.firestore().collection('jobs').doc(jobId).get();
+    if (!snap.exists) throw new HttpsError('not-found', 'Job not found.');
+    const job = snap.data();
+    if (!job.adminSignedOff || !job.invoicePdfPath) throw new HttpsError('failed-precondition', 'Sign off the work before sending the invoice.');
+    if (!job.clientEmail) throw new HttpsError('failed-precondition', 'This job has no client email.');
     try {
-      await sendEmailJs(serviceId, templateId, publicKey, privateKey, {
-        ...templateParams,
-        invoice_pdf: pdfBytes.toString('base64'),
-      });
+      await sendInvoiceEmail(jobId, job);
     } catch (err) {
-      console.error(`Invoice email with attachment failed for job ${jobId}, sending link only:`, err.message);
-      sentWith = 'link';
-      try {
-        await sendEmailJs(serviceId, templateId, publicKey, privateKey, templateParams);
-      } catch (linkErr) {
-        console.error(`Invoice email failed for job ${jobId}:`, linkErr.message);
-        await billingRef.set({ invoiceEmailError: linkErr.message, invoiceEmailAttemptedAt: new Date() }, { merge: true });
-        return;
-      }
+      throw new HttpsError('internal', `Invoice email failed: ${err.message}`);
     }
-    await billingRef.set({ invoiceEmailSentAt: new Date(), invoiceEmailSentWith: sentWith }, { merge: true });
+    return { sentTo: job.clientEmail };
   },
 );
 

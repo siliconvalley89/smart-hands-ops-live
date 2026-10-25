@@ -1,4 +1,5 @@
-import { Shield, Trash2 } from 'lucide-react';
+import { useState } from 'react';
+import { Mail, Shield, Trash2 } from 'lucide-react';
 import TechNameWithPhoto from './TechNameWithPhoto';
 import CompletedJobPhotos from './CompletedJobPhotos';
 import { formatDate, getPhotoCount } from '../lib/jobDisplay';
@@ -26,8 +27,22 @@ export default function CompletedJobs({
   downloadPhotos,
   setAppError,
   adminSignOffWork,
+  resendInvoiceEmail,
+  askConfirm,
   handleDelete,
 }) {
+  const [resendingJobId, setResendingJobId] = useState(null);
+  const [resentJobId, setResentJobId] = useState(null);
+
+  const handleResend = async (job) => {
+    if (!(await askConfirm(`Resend the invoice to ${job.clientEmail || 'the client'}? The PDF will be regenerated from current billing data.`, 'Resend'))) return;
+    setResendingJobId(job.id);
+    setResentJobId(null);
+    const sent = await resendInvoiceEmail(job);
+    setResendingJobId(null);
+    if (sent) setResentJobId(job.id);
+  };
+
   return (
     <section className="grid gap-4">
       <div className="flex items-center justify-between rounded-3xl bg-slate-800 border border-slate-700 p-4">
@@ -149,6 +164,18 @@ export default function CompletedJobs({
                       )}
                       {profile.role === 'admin' && job.adminSignedOff && (
                         <div className="rounded-2xl bg-teal-500/10 px-4 py-2 text-sm text-teal-200 flex items-center gap-2"><Shield size={14} /> Admin signed off</div>
+                      )}
+                      {profile.role === 'admin' && job.adminSignedOff && job.invoicePdfPath && (
+                        <div className="flex flex-col gap-1">
+                          <button
+                            onClick={() => handleResend(job)}
+                            disabled={resendingJobId === job.id}
+                            className="rounded-2xl border border-teal-600 px-4 py-2 text-sm font-semibold text-teal-200 hover:bg-teal-600/20 transition flex items-center gap-2 disabled:opacity-60"
+                          >
+                            <Mail size={16} /> {resendingJobId === job.id ? 'Sending...' : 'Resend invoice email'}
+                          </button>
+                          {resentJobId === job.id && <div className="text-xs text-emerald-300">Invoice emailed to {job.clientEmail}</div>}
+                        </div>
                       )}
                       {profile.role === 'admin' && (
                         <button onClick={() => handleDelete(job.id)} className="rounded-2xl bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-500 transition flex items-center gap-2">
