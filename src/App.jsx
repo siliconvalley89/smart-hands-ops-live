@@ -383,7 +383,7 @@ function App() {
 
       await firebaseSignOut(auth);
       await signInWithEmailAndPassword(auth, adminEmail, adminPassword);
-      // Manually restore admin state � avoids UI flicker from onAuthStateChanged
+      // Manually restore admin state — avoids UI flicker from onAuthStateChanged
       const adminDocSnap = await getDoc(doc(db, 'users', adminUid));
       setFirebaseUser(auth.currentUser);
       if (adminDocSnap.exists()) setProfile({ id: adminDocSnap.id, ...adminDocSnap.data() });
@@ -1070,7 +1070,7 @@ function App() {
 
   if (!authReady) {
     return (
-      <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center">Loading�</div>
+      <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center">Loading…</div>
     );
   }
 
