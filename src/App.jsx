@@ -766,6 +766,7 @@ function App() {
         await uploadBytes(storageRef, upload);
         return { url: await getDownloadURL(storageRef), path: storageRef.fullPath };
       }));
+      results.forEach((r) => { if (r.status === 'rejected') console.error('Photo upload failed', { jobId, type, code: r.reason?.code, message: r.reason?.message, reason: r.reason }); });
       const uploaded = results.filter((r) => r.status === 'fulfilled').map((r) => r.value);
       if (uploaded.length) {
         const batch = writeBatch(db);
@@ -803,6 +804,7 @@ function App() {
           name: file.name, url: await getDownloadURL(storageRef), path: storageRef.fullPath, size: file.size, type: file.type || '',
         };
       }));
+      results.forEach((r) => { if (r.status === 'rejected') console.error('File upload failed', { jobId: job.id, code: r.reason?.code, message: r.reason?.message, reason: r.reason }); });
       const uploaded = results.filter((r) => r.status === 'fulfilled').map((r) => r.value);
       if (uploaded.length) {
         const batch = writeBatch(db);
