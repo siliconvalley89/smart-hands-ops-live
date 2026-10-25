@@ -47,7 +47,7 @@ export default function CompletedJobs({
         <div className="grid gap-6">
           <input
             type="text"
-            placeholder="Search client, location, task, tech�"
+            placeholder="Search client, location, task, tech…"
             value={completedSearch}
             onChange={(e) => setCompletedSearch(e.target.value)}
             className="rounded-2xl bg-slate-800 border border-slate-600 px-4 py-2 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-teal-500"
@@ -139,7 +139,7 @@ export default function CompletedJobs({
                         </div>
                       )}
                       {job.clientSignedOff && <div className="text-emerald-300">Client signed off</div>}
-                      {job.adminSignedOff && <div className="text-teal-300">Admin signed off{job.adminSignedOffAt ? ` � ${formatDate(job.adminSignedOffAt)}` : ''}</div>}
+                      {job.adminSignedOff && <div className="text-teal-300">Admin signed off{job.adminSignedOffAt ? ` · ${formatDate(job.adminSignedOffAt)}` : ''}</div>}
                     </div>
                     <div className="flex flex-wrap gap-3">
                       {profile.role === 'admin' && !job.adminSignedOff && (
