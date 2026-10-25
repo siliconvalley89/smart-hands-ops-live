@@ -55,6 +55,20 @@ service cloud.firestore {
         (isAdmin() || (isVerifiedTech() && job.assignedTechEmail == request.auth.token.email));
     }
 
+    function breakChangeAllowed() {
+      let before = resource.data.get('breaks', []);
+      let after = request.resource.data.get('breaks', []);
+      let last = before.size() - 1;
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny(['breaks']) ||
+        (after.size() == before.size() + 1 && (
+          before.size() == 0 ||
+          (before.size() == 1 && before[last].get('endAt', null) != null &&
+            request.time >= resource.data.checkInAt + duration.value(12, 'h')))) ||
+        (after.size() == before.size() && before.size() > 0 && (
+          before[last].get('endAt', null) != null ||
+          request.time >= before[last].startAt + duration.value(30, 'm')));
+    }
+
     function canReadJobMedia(jobId) {
       let job = get(/databases/$(database)/documents/jobs/$(jobId)).data;
       return isAdmin() ||
@@ -173,7 +187,8 @@ service cloud.firestore {
             'breaks', 'signoffRequestedAt'
           ]) &&
           request.resource.data.get('updatedBy', '') == request.auth.token.email &&
-          request.resource.data.status in ['Assigned', 'Dispatched', 'En Route', 'On Site', 'Ready for Signoff']) ||
+          request.resource.data.status in ['Assigned', 'Dispatched', 'En Route', 'On Site', 'Ready for Signoff'] &&
+          breakChangeAllowed()) ||
         // Clients can only sign off their own job once work is ready; admins mark it Completed
         (isVerifiedClient() && resource.data.clientEmail == request.auth.token.email &&
           resource.data.status == 'Ready for Signoff' &&

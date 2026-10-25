@@ -24,7 +24,7 @@ import useJobs from './hooks/useJobs';
 import useTechs from './hooks/useTechs';
 import useParts from './hooks/useParts';
 import useUsers from './hooks/useUsers';
-import { getCheckoutBlockReason } from './lib/jobDisplay';
+import { getBreakReturnTime, getBreakStartBlock, getCheckoutBlockReason } from './lib/jobDisplay';
 import TechNameWithPhoto from './features/TechNameWithPhoto';
 import ActiveJobs from './features/ActiveJobs';
 import SchedulingBoard from './features/SchedulingBoard';
@@ -473,6 +473,20 @@ function App() {
       const blockReason = getCheckoutBlockReason(job);
       if (blockReason) {
         setAppError(blockReason);
+        return;
+      }
+    }
+    if (eventType === 'breakStart') {
+      const blockBreak = getBreakStartBlock(job);
+      if (blockBreak) {
+        setAppError(blockBreak.message);
+        return;
+      }
+    }
+    if (eventType === 'breakEnd') {
+      const returnAt = getBreakReturnTime(job);
+      if (returnAt && Date.now() < returnAt) {
+        setAppError(`You can clock back in at ${new Date(returnAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}. Breaks must last at least 30 minutes.`);
         return;
       }
     }

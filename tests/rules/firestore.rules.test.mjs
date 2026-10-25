@@ -594,3 +594,57 @@ describe('quotes', () => {
     await assertSucceeds(deleteDoc(doc(as.admin(), 'quotes/q-draft')));
   });
 });
+
+describe('tech breaks', () => {
+  const MIN = 60 * 1000;
+  const HOUR = 60 * MIN;
+  const closedBreak = (startAt) => ({ startAt, endAt: new Date(startAt.getTime() + 30 * MIN) });
+  const setBreaks = (breaks, checkInAt = new Date()) => testEnv.withSecurityRulesDisabled(async (context) => {
+    await setDoc(doc(context.firestore(), 'jobs/job-onsite'), {
+      client: 'Acme', clientEmail: CLIENT, assignedTechEmail: TECH, status: 'On Site',
+      billingMigrated: true, invoiceSent: false, clientSignedOff: false, checkInAt, breaks,
+    });
+  });
+  const techUpdate = (fields) => updateDoc(doc(as.tech(), 'jobs/job-onsite'), {
+    status: 'On Site', updatedBy: TECH, updatedAt: new Date(), ...fields,
+  });
+
+  it('tech can start a break', async () => {
+    await setBreaks([]);
+    await assertSucceeds(techUpdate({ breaks: [{ startAt: new Date() }] }));
+  });
+
+  it('tech cannot clock back in less than 30 minutes after clocking out', async () => {
+    await setBreaks([{ startAt: new Date(Date.now() - 5 * MIN) }]);
+    await assertFails(techUpdate({ breaks: [{ startAt: new Date(Date.now() - 5 * MIN), endAt: new Date() }] }));
+  });
+
+  it('tech can clock back in once 30 minutes have passed', async () => {
+    await setBreaks([{ startAt: new Date(Date.now() - 31 * MIN) }]);
+    await assertSucceeds(techUpdate({ breaks: [{ startAt: new Date(Date.now() - 31 * MIN), endAt: new Date() }] }));
+  });
+
+  it('a status update during an open break is still allowed', async () => {
+    await setBreaks([{ startAt: new Date(Date.now() - 5 * MIN) }]);
+    await assertSucceeds(techUpdate({}));
+  });
+
+  it('tech cannot take a second break before 12 hours on site', async () => {
+    const first = closedBreak(new Date(Date.now() - 2 * HOUR));
+    await setBreaks([first], new Date(Date.now() - 3 * HOUR));
+    await assertFails(techUpdate({ breaks: [first, { startAt: new Date() }] }));
+  });
+
+  it('tech can take a second break after 12 hours on site', async () => {
+    const first = closedBreak(new Date(Date.now() - 6 * HOUR));
+    await setBreaks([first], new Date(Date.now() - (12 * HOUR + MIN)));
+    await assertSucceeds(techUpdate({ breaks: [first, { startAt: new Date() }] }));
+  });
+
+  it('tech cannot take a third break', async () => {
+    const first = closedBreak(new Date(Date.now() - 14 * HOUR));
+    const second = closedBreak(new Date(Date.now() - 1 * HOUR));
+    await setBreaks([first, second], new Date(Date.now() - 15 * HOUR));
+    await assertFails(techUpdate({ breaks: [first, second, { startAt: new Date() }] }));
+  });
+});

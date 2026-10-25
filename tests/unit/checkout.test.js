@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { getCheckoutBlockReason } from '../../src/lib/jobDisplay';
+import { getBreakReturnTime, getBreakStartBlock, getCheckoutBlockReason } from '../../src/lib/jobDisplay';
 
 const NOW = new Date('2026-10-24T18:00:00Z');
 const HOUR = 60 * 60 * 1000;
@@ -64,5 +64,44 @@ describe('getCheckoutBlockReason', () => {
   it('reports the photo requirement first when both rules fail', () => {
     const both = job({ photoCounts: { after: 0 }, checkInAt: new Date(NOW.getTime() - 6 * HOUR) });
     expect(getCheckoutBlockReason(both)).toBe(PHOTO_REQUIRED);
+  });
+});
+
+describe('getBreakReturnTime', () => {
+  const MIN = 60 * 1000;
+
+  it('is 30 minutes after the open break started', () => {
+    const startAt = new Date(NOW.getTime() - 10 * MIN);
+    expect(getBreakReturnTime(job({ breaks: [{ startAt }] }))).toBe(startAt.getTime() + 30 * MIN);
+  });
+
+  it('is null when no break is open', () => {
+    expect(getBreakReturnTime(job())).toBeNull();
+    expect(getBreakReturnTime(job({ breaks: [{ startAt: NOW, endAt: NOW }] }))).toBeNull();
+  });
+});
+
+describe('getBreakStartBlock', () => {
+  const closed = (startAt) => ({ startAt, endAt: new Date(startAt.getTime() + 30 * 60 * 1000) });
+
+  it('allows the first break at any time', () => {
+    expect(getBreakStartBlock(job(), NOW.getTime())).toBeNull();
+  });
+
+  it('blocks a second break until 12 hours on site', () => {
+    const first = closed(new Date(NOW.getTime() - 2 * HOUR));
+    const block = getBreakStartBlock(job({ checkInAt: new Date(NOW.getTime() - 3 * HOUR), breaks: [first] }), NOW.getTime());
+    expect(block.label).toMatch(/^Second break at /);
+  });
+
+  it('allows a second break after 12 hours on site', () => {
+    const first = closed(new Date(NOW.getTime() - 6 * HOUR));
+    const withTwelveHours = job({ checkInAt: new Date(NOW.getTime() - 12 * HOUR), breaks: [first] });
+    expect(getBreakStartBlock(withTwelveHours, NOW.getTime())).toBeNull();
+  });
+
+  it('blocks a third break', () => {
+    const breaks = [closed(new Date(NOW.getTime() - 14 * HOUR)), closed(new Date(NOW.getTime() - HOUR))];
+    expect(getBreakStartBlock(job({ checkInAt: new Date(NOW.getTime() - 15 * HOUR), breaks }), NOW.getTime()).label).toBe('Break limit reached');
   });
 });

@@ -1,4 +1,5 @@
 import { doc, updateDoc } from 'firebase/firestore';
+import { useEffect, useState } from 'react';
 import { db, auth } from '../firebase';
 import { Wrench, Clock, MapPin, Trash2, List, CheckCircle, Plus, FileText, Shield, Download } from 'lucide-react';
 import { formatSchedule, getJobStatusLabel } from '../lib/jobTime';
@@ -6,7 +7,7 @@ import { generateInvoicePdf } from '../lib/invoice';
 import { calcInvoiceTotal } from '../lib/invoiceTotals';
 import { getReceivableStatus } from '../lib/payments';
 import { isFieldRole } from '../lib/roles';
-import { formatDate, getPhotoCount, getCheckoutBlockReason } from '../lib/jobDisplay';
+import { formatDate, getPhotoCount, getCheckoutBlockReason, getBreakReturnTime, getBreakStartBlock } from '../lib/jobDisplay';
 import TechNameWithPhoto from './TechNameWithPhoto';
 import JobMedia from './JobMedia';
 
@@ -64,6 +65,11 @@ export default function ActiveJobs({
   adminSignOffWork,
   handleDelete,
 }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 15000);
+    return () => clearInterval(timer);
+  }, []);
   return (
     <section className="grid gap-4">
       <div className="flex items-center justify-between rounded-3xl bg-slate-800 border border-slate-700 p-4">
@@ -527,22 +533,27 @@ export default function ActiveJobs({
                     {isFieldRole(profile.role) && job.checkInAt && !job.checkOutAt && (() => {
                       const hasActiveBreak = (job.breaks || []).some(b => b.startAt && !b.endAt);
                       const checkoutBlockReason = getCheckoutBlockReason(job);
+                      const breakReturnAt = getBreakReturnTime(job);
+                      const breakTooShort = breakReturnAt != null && now < breakReturnAt;
+                      const breakStartBlock = getBreakStartBlock(job, now);
                       return hasActiveBreak ? (
                         <button
                           onClick={() => recordTechGeoEvent(job, 'breakEnd')}
-                          disabled={geoEventBusyJobId === job.id}
-                          className="rounded-2xl bg-green-600 px-4 py-2 text-sm font-semibold text-white hover:bg-green-500 transition flex items-center gap-2 disabled:opacity-60"
+                          disabled={geoEventBusyJobId === job.id || breakTooShort}
+                          className="rounded-2xl bg-green-600 px-4 py-2 text-sm font-semibold text-white hover:bg-green-500 transition flex items-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
                         >
-                          <Clock size={16} /> {geoEventBusyJobId === job.id ? 'Clocking in...' : 'Clock back in from break'}
+                          <Clock size={16} /> {breakTooShort
+                            ? `Back in at ${new Date(breakReturnAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`
+                            : geoEventBusyJobId === job.id ? 'Clocking in...' : 'Clock back in from break'}
                         </button>
                       ) : (
                         <>
                           <button
                             onClick={() => recordTechGeoEvent(job, 'breakStart')}
-                            disabled={geoEventBusyJobId === job.id}
+                            disabled={geoEventBusyJobId === job.id || Boolean(breakStartBlock)}
                             className="rounded-2xl bg-amber-600 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-500 transition flex items-center gap-2 disabled:opacity-60"
                           >
-                            <Clock size={16} /> {geoEventBusyJobId === job.id ? 'Clocking out...' : 'Start meal break'}
+                            <Clock size={16} /> {geoEventBusyJobId === job.id ? 'Clocking out...' : breakStartBlock?.label || 'Start meal break'}
                           </button>
                           <button
                             onClick={() => recordTechGeoEvent(job, 'checkOut')}
