@@ -88,7 +88,7 @@ export default function ActiveJobs({
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
           <input
             type="text"
-            placeholder="Search client, location, task, tech�"
+            placeholder="Search client, location, task, tech…"
             value={jobSearch}
             onChange={(e) => setJobSearch(e.target.value)}
             className="flex-1 rounded-2xl bg-slate-800 border border-slate-600 px-4 py-2 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-teal-500"
@@ -110,7 +110,7 @@ export default function ActiveJobs({
           </div>
         </div>
       {loading ? (
-        <div className="rounded-3xl bg-slate-950/70 p-8 text-center text-slate-400">Loading jobs�</div>
+        <div className="rounded-3xl bg-slate-950/70 p-8 text-center text-slate-400">Loading jobs…</div>
       ) : filteredActiveJobs.length === 0 ? (
         <div className="rounded-3xl bg-slate-950/70 p-8 text-center text-slate-400">{activeJobs.length === 0 ? 'No active jobs.' : 'No jobs match your filter.'}</div>
       ) : (
@@ -498,13 +498,13 @@ export default function ActiveJobs({
                       const short = durationMin != null && durationMin < 30;
                       return (
                         <div key={idx} className={short ? 'text-red-400' : ''}>
-                          Break {idx + 1}: out {formatDate(brk.startAt)}{brk.endAt ? ` ? back ${formatDate(brk.endAt)} (${durationMin} min${short ? ' ? under 30 min' : ''})` : ' � on break'}
+                          Break {idx + 1}: out {formatDate(brk.startAt)}{brk.endAt ? ` → back ${formatDate(brk.endAt)} (${durationMin} min${short ? ' ⚠ under 30 min' : ''})` : ' · on break'}
                         </div>
                       );
                     })}
                     {job.checkOutAt && <div>Check-out: {formatDate(job.checkOutAt)} ({Number(job.checkOutLat || 0).toFixed(5)}, {Number(job.checkOutLng || 0).toFixed(5)})</div>}
                     {job.clientSignedOff && <div className="text-emerald-300">Client signed off</div>}
-                    {job.adminSignedOff && <div className="text-teal-300">Admin signed off{job.adminSignedOffAt ? ` � ${formatDate(job.adminSignedOffAt)}` : ''}</div>}
+                    {job.adminSignedOff && <div className="text-teal-300">Admin signed off{job.adminSignedOffAt ? ` · ${formatDate(job.adminSignedOffAt)}` : ''}</div>}
                   </div>
                   <div className="flex flex-wrap gap-3">
                     {isFieldRole(profile.role) && !job.checkInAt && job.status !== 'En Route' && (
