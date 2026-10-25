@@ -25,6 +25,8 @@ import useTechs from './hooks/useTechs';
 import useParts from './hooks/useParts';
 import useUsers from './hooks/useUsers';
 import { getBreakReturnTime, getBreakStartBlock, getCheckoutBlockReason } from './lib/jobDisplay';
+
+const ACTIVE_PAGE_SIZE = 50;
 import TechNameWithPhoto from './features/TechNameWithPhoto';
 import ActiveJobs from './features/ActiveJobs';
 import SchedulingBoard from './features/SchedulingBoard';
@@ -141,6 +143,7 @@ function App() {
   const [showUsersPanel, setShowUsersPanel] = useState(false);
   const [expandedJobIds, setExpandedJobIds] = useState([]);
   const [completedLimit, setCompletedLimit] = useState(25);
+  const [activeLimit, setActiveLimit] = useState(ACTIVE_PAGE_SIZE);
   const [showJobsPanel, setShowJobsPanel] = useState(false);
   const [showReceivablesPanel, setShowReceivablesPanel] = useState(false);
   const [showCompletedJobsPanel, setShowCompletedJobsPanel] = useState(false);
@@ -1448,7 +1451,9 @@ function App() {
           setJobStatusFilter={setJobStatusFilter}
           loading={loading}
           activeJobs={activeJobs}
-          filteredActiveJobs={filteredActiveJobs}
+          filteredActiveJobs={filteredActiveJobs.slice(0, activeLimit)}
+          activeMatchCount={filteredActiveJobs.length}
+          onLoadMoreActive={() => setActiveLimit((prev) => prev + ACTIVE_PAGE_SIZE)}
           expandedJobIds={expandedJobIds}
           setExpandedJobIds={setExpandedJobIds}
           editingJobId={editingJobId}

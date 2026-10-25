@@ -23,6 +23,8 @@ export default function ActiveJobs({
   loading,
   activeJobs,
   filteredActiveJobs,
+  activeMatchCount,
+  onLoadMoreActive,
   expandedJobIds,
   setExpandedJobIds,
   editingJobId,
@@ -604,6 +606,15 @@ export default function ActiveJobs({
               </div>
             );
           })}
+          {filteredActiveJobs.length < activeMatchCount && (
+            <button
+              type="button"
+              onClick={onLoadMoreActive}
+              className="w-full rounded-2xl border border-slate-600 px-4 py-3 text-sm text-slate-200 hover:bg-slate-700 transition"
+            >
+              Load more ({filteredActiveJobs.length} of {activeMatchCount})
+            </button>
+          )}
         </div>
       )}
       </div>
