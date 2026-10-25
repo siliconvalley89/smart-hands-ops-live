@@ -23,4 +23,16 @@ describe('csvCell', () => {
   it('keeps zero as zero', () => {
     expect(csvCell(0)).toBe('"0"');
   });
+
+  it('neutralizes text that spreadsheets would read as a formula', () => {
+    expect(csvCell('=HYPERLINK("x")')).toBe(`"'=HYPERLINK(""x"")"`);
+    expect(csvCell('+1 555')).toBe(`"'+1 555"`);
+    expect(csvCell('-Dock 4')).toBe(`"'-Dock 4"`);
+    expect(csvCell('@cmd')).toBe(`"'@cmd"`);
+  });
+
+  it('leaves numeric values unchanged, including negatives', () => {
+    expect(csvCell(-5)).toBe('"-5"');
+    expect(csvCell(12.5)).toBe('"12.5"');
+  });
 });
