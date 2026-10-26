@@ -14,6 +14,7 @@ const { quoteTotalCents, quoteAcceptProblem, buildQuoteJob } = require('./quote'
 const Stripe = require('stripe');
 const { checkoutAction, checkoutProblem, checkoutSessionParams, paymentFromCheckoutSession } = require('./stripe');
 const { validateWebsiteIntake } = require('./websiteIntake');
+const { REVERT_FIELDS, hasTechConflict, needsConflictCheck, toMillisValue } = require('./schedule');
 
 const WEBSITE_INTAKE_LIMIT = 10;
 const WEBSITE_INTAKE_WINDOW_MS = 60 * 60 * 1000;
@@ -418,35 +419,7 @@ exports.manageTechStatusOnJobCreated = onDocumentCreated('jobs/{jobId}', async (
 });
 
 // ── Auto-assign: nearest technician with no overlapping job ──────────────────
-const JOB_WINDOW_MS = 2 * 60 * 60 * 1000;
 const APP_CREATOR_ROLES = ['client', 'adminAssistant', 'admin'];
-
-function toMillisValue(value) {
-  if (!value) return null;
-  const ms = typeof value.toMillis === 'function' ? value.toMillis() : new Date(value).getTime();
-  return Number.isNaN(ms) ? null : ms;
-}
-
-function getJobWindowMs(job, now) {
-  const scheduled = toMillisValue(job.scheduledFor);
-  if (scheduled != null) {
-    const end = toMillisValue(job.scheduledEnd);
-    return { start: scheduled, end: end != null && end > scheduled ? end : scheduled + JOB_WINDOW_MS };
-  }
-  if (job.status === 'En Route' || (job.status === 'On Site' && !job.checkOutAt)) {
-    return { start: now, end: now + JOB_WINDOW_MS };
-  }
-  return null;
-}
-
-function hasTechConflict(target, techEmail, openJobs, now) {
-  const targetWindow = getJobWindowMs(target, now) || { start: now, end: now + JOB_WINDOW_MS };
-  return openJobs.some((other) => {
-    if (other.id === target.id || other.assignedTechEmail !== techEmail) return false;
-    const otherWindow = getJobWindowMs(other, now);
-    return otherWindow && otherWindow.start < targetWindow.end && targetWindow.start < otherWindow.end;
-  });
-}
 
 function distanceMiles(lat1, lon1, lat2, lon2) {
   const toRad = (value) => (value * Math.PI) / 180;
@@ -497,6 +470,30 @@ exports.assignTechOnJobCreate = onDocumentCreated('jobs/{jobId}', async (event) 
       assignedTechDistanceMiles: nearest.miles,
       assignedTechDistanceKm: null,
     });
+  });
+  return null;
+});
+
+// Undoes a schedule or technician change that double-books someone, since rules cannot query other jobs
+exports.revertConflictingScheduleChanges = onDocumentUpdated('jobs/{jobId}', async (event) => {
+  const before = event.data.before.data();
+  const after = event.data.after.data();
+  if (!needsConflictCheck(before, after)) return null;
+  const jobId = event.params.jobId;
+
+  const openSnap = await getFirestore().collection('jobs').where('status', '!=', 'Completed').get();
+  const openJobs = openSnap.docs.map((docItem) => ({ id: docItem.id, ...docItem.data() }));
+  if (!hasTechConflict({ id: jobId, ...after }, after.assignedTechEmail, openJobs, Date.now())) return null;
+
+  const revert = { conflictRevertedAt: FieldValue.serverTimestamp() };
+  for (const field of REVERT_FIELDS) {
+    revert[field] = before[field] === undefined ? FieldValue.delete() : before[field];
+  }
+  await event.data.after.ref.update(revert);
+  await notifyAdmins(jobId, {
+    title: 'Schedule change undone',
+    body: `${after.assignedTechName || 'The technician'} is already booked then, so ${after.client || 'this job'} went back to its previous schedule.`,
+    tag: `conflict-revert-${jobId}-${Date.now()}`,
   });
   return null;
 });
@@ -921,33 +918,66 @@ exports.createPaymentCheckout = onCall({ secrets: [stripeSecretKey] }, async (re
 
   const db = getFirestore();
   const billingRef = db.collection('jobBilling').doc(jobId);
-  const { openCheckout } = (await billingRef.get()).data() || {};
   const stripe = new Stripe(stripeSecretKey.value());
-  let previous = null;
-  if (openCheckout?.sessionId) {
-    previous = await stripe.checkout.sessions.retrieve(openCheckout.sessionId);
-    const paymentRecorded = (await snap.ref.collection('payments').doc(`stripe_${previous.id}`).get()).exists;
-    const action = checkoutAction(previous, {
-      amountCents: balanceCents,
-      paymentRecorded,
-      paymentFailed: openCheckout.paymentFailed === true,
-    });
-    if (action === 'reuse') return { url: previous.url };
-    if (action === 'block') {
-      throw new HttpsError('failed-precondition', 'A payment for this invoice is already processing. Your balance will update once it posts.');
+  const openCheckout = await claimCheckout(billingRef);
+  try {
+    let previous = null;
+    if (openCheckout.sessionId) {
+      previous = await stripe.checkout.sessions.retrieve(openCheckout.sessionId);
+      const paymentRecorded = (await snap.ref.collection('payments').doc(`stripe_${previous.id}`).get()).exists;
+      const action = checkoutAction(previous, {
+        amountCents: balanceCents,
+        paymentRecorded,
+        paymentFailed: openCheckout.paymentFailed === true || (await bankTransferFailed(stripe, previous)),
+      });
+      if (action === 'reuse') {
+        await releaseCheckout(billingRef);
+        return { url: previous.url };
+      }
+      if (action === 'block') {
+        throw new HttpsError('failed-precondition', 'A payment for this invoice is already processing. Your balance will update once it posts.');
+      }
+      if (action === 'expire') await stripe.checkout.sessions.expire(previous.id);
     }
-    if (action === 'expire') await stripe.checkout.sessions.expire(previous.id);
-  }
 
-  const session = await stripe.checkout.sessions.create(
-    checkoutSessionParams({ jobId, job, amountCents: balanceCents }),
-    { idempotencyKey: `checkout-${jobId}-${balanceCents}-${previous?.id || 'none'}-${Math.floor(Date.now() / (10 * 60 * 1000))}` },
-  );
-  // An idempotent replay can return a session that has already settled; the client should retry in a few minutes
-  if (session.status !== 'open') throw new HttpsError('unavailable', 'Please try again in a few minutes.');
-  await billingRef.update({ openCheckout: { sessionId: session.id } });
-  return { url: session.url };
+    const session = await stripe.checkout.sessions.create(
+      checkoutSessionParams({ jobId, job, amountCents: balanceCents }),
+      { idempotencyKey: `checkout-${jobId}-${balanceCents}-${previous?.id || 'none'}-${Math.floor(Date.now() / (10 * 60 * 1000))}` },
+    );
+    // An idempotent replay can return a session that has already settled; the client should retry in a few minutes
+    if (session.status !== 'open') throw new HttpsError('unavailable', 'Please try again in a few minutes.');
+    await billingRef.update({ openCheckout: { sessionId: session.id } });
+    return { url: session.url };
+  } catch (err) {
+    await releaseCheckout(billingRef);
+    throw err;
+  }
 });
+
+// Only one request at a time may decide and create a checkout session for an invoice
+const CHECKOUT_LOCK_MS = 60 * 1000;
+
+async function claimCheckout(billingRef) {
+  return getFirestore().runTransaction(async (tx) => {
+    const openCheckout = (await tx.get(billingRef)).data()?.openCheckout || {};
+    if (Date.now() - (toMillisValue(openCheckout.lockedAt) ?? 0) < CHECKOUT_LOCK_MS) {
+      throw new HttpsError('failed-precondition', 'Your payment is already being prepared. Please try again in a moment.');
+    }
+    tx.update(billingRef, { 'openCheckout.lockedAt': FieldValue.serverTimestamp() });
+    return openCheckout;
+  });
+}
+
+async function releaseCheckout(billingRef) {
+  await billingRef.update({ 'openCheckout.lockedAt': FieldValue.delete() }).catch(() => {});
+}
+
+// A bank transfer that failed leaves the session complete and unpaid, and its payment intent needs a new method
+async function bankTransferFailed(stripe, session) {
+  if (session.status !== 'complete' || session.payment_status !== 'unpaid' || !session.payment_intent) return false;
+  const intent = await stripe.paymentIntents.retrieve(session.payment_intent);
+  return intent.status === 'requires_payment_method';
+}
 
 async function paymentMethodTypeOf(stripe, session) {
   const intent = await stripe.paymentIntents.retrieve(session.payment_intent, { expand: ['payment_method'] });
