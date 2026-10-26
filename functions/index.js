@@ -30,8 +30,10 @@ function nextIntakeWindow(current, limit, now) {
 }
 
 // Cloud Functions appends the real client IP last; earlier entries are client-supplied and can be spoofed.
+const websiteClientIp = (req) => String(req.headers['x-forwarded-for'] || req.ip || 'unknown').split(',').pop().trim();
+
 const websiteIntakeAllowed = (db, req) => {
-  const clientIp = String(req.headers['x-forwarded-for'] || req.ip || 'unknown').split(',').pop().trim();
+  const clientIp = websiteClientIp(req);
   const ipRef = db.collection('websiteIntakeLimits').doc(crypto.createHash('sha256').update(clientIp).digest('hex'));
   const globalRef = db.collection('websiteIntakeLimits').doc('global');
   return db.runTransaction(async (tx) => {
@@ -44,6 +46,20 @@ const websiteIntakeAllowed = (db, req) => {
     tx.set(globalRef, global);
     return true;
   });
+};
+
+const turnstileVerified = async (token, req) => {
+  if (typeof token !== 'string' || !token) return false;
+  const response = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
+    method: 'POST',
+    body: new URLSearchParams({
+      secret: turnstileSecretKey.value().trim(),
+      response: token,
+      remoteip: websiteClientIp(req),
+    }),
+  });
+  const result = await response.json();
+  return result.success === true;
 };
 
 initializeApp();
@@ -62,6 +78,7 @@ const emailjsInvoiceTemplateId = defineSecret('EMAILJS_INVOICE_TEMPLATE_ID');
 // Stripe: firebase functions:secrets:set STRIPE_SECRET_KEY / STRIPE_WEBHOOK_SECRET
 const stripeSecretKey = defineSecret('STRIPE_SECRET_KEY');
 const stripeWebhookSecret = defineSecret('STRIPE_WEBHOOK_SECRET');
+const turnstileSecretKey = defineSecret('TURNSTILE_SECRET_KEY');
 
 /**
  * Looks up the assigned tech's FCM token and sends a push notification
@@ -1352,7 +1369,7 @@ exports.pruneWebsiteIntakeLimits = onSchedule(
   },
 );
 
-exports.createJobFromWebsite = onRequest({ cors: ['https://www.siliconvalleysmarthands.com'] }, async (req, res) => {
+exports.createJobFromWebsite = onRequest({ cors: ['https://www.siliconvalleysmarthands.com'], secrets: [turnstileSecretKey] }, async (req, res) => {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -1363,6 +1380,10 @@ exports.createJobFromWebsite = onRequest({ cors: ['https://www.siliconvalleysmar
   }
 
   const body = req.body || {};
+  if (!(await turnstileVerified(body.turnstileToken, req))) {
+    return res.status(403).json({ error: 'Verification failed. Please try again.' });
+  }
+
   const validationError = validateWebsiteIntake(body);
   if (validationError) {
     return res.status(400).json({ error: validationError });
