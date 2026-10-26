@@ -1,12 +1,32 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { httpsCallable } from 'firebase/functions';
-import { functions } from '../firebase';
+import { doc, onSnapshot } from 'firebase/firestore';
+import { db, functions } from '../firebase';
 import useQuotes from '../hooks/useQuotes';
 import { canAcceptQuote, isQuoteExpired, quoteTotal } from '../lib/quotes';
 
 const acceptQuoteCall = httpsCallable(functions, 'acceptQuote');
 const money = (amount) => `$${Number(amount || 0).toFixed(2)}`;
 const formatDate = (timestamp) => (timestamp?.toDate ? timestamp.toDate().toLocaleDateString() : '—');
+
+function AcceptedJobStatus({ jobId }) {
+  const [status, setStatus] = useState(null);
+
+  useEffect(() => {
+    if (!jobId) return () => {};
+    return onSnapshot(
+      doc(db, 'jobs', jobId),
+      (snap) => setStatus(snap.data()?.status || null),
+      () => setStatus(null),
+    );
+  }, [jobId]);
+
+  return (
+    <span className="text-sm font-semibold text-teal-300">
+      {status ? `Accepted · Job ${status.toLowerCase()}` : 'Accepted, job created'}
+    </span>
+  );
+}
 
 export default function ClientQuotes({ clientEmail }) {
   const quotes = useQuotes({ clientEmail });
@@ -55,7 +75,7 @@ export default function ClientQuotes({ clientEmail }) {
                 </button>
               )}
               {quote.status === 'Sent' && expired && <span className="text-sm text-slate-400">Expired</span>}
-              {quote.status === 'Accepted' && <span className="text-sm font-semibold text-teal-300">Accepted, job created</span>}
+              {quote.status === 'Accepted' && <AcceptedJobStatus jobId={quote.jobId} />}
             </article>
           );
         })}
