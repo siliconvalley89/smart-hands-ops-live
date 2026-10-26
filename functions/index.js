@@ -1336,6 +1336,22 @@ exports.lookupAssetHistory = onCall(async (request) => {
   return { serialNumber, visits };
 });
 
+exports.pruneWebsiteIntakeLimits = onSchedule(
+  { schedule: 'every day 03:17', timeZone: 'America/Los_Angeles' },
+  async () => {
+    const db = getFirestore();
+    const cutoff = Date.now() - WEBSITE_INTAKE_WINDOW_MS;
+    let snap;
+    do {
+      snap = await db.collection('websiteIntakeLimits').where('windowStartMs', '<', cutoff).limit(500).get();
+      if (snap.empty) break;
+      const batch = db.batch();
+      snap.docs.forEach((doc) => batch.delete(doc.ref));
+      await batch.commit();
+    } while (snap.size === 500);
+  },
+);
+
 exports.createJobFromWebsite = onRequest({ cors: ['https://www.siliconvalleysmarthands.com'] }, async (req, res) => {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
