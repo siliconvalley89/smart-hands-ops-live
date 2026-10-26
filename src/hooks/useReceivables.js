@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Timestamp, collection, doc, onSnapshot, query, where } from 'firebase/firestore';
+import { Timestamp, collection, doc, onSnapshot, orderBy, query, where } from 'firebase/firestore';
 import { db } from '../firebase';
 import { getReceivableStatus } from '../lib/payments';
 
@@ -22,14 +22,21 @@ export default function useReceivables({ includeOlder, setAppError }) {
 
   useEffect(() => {
     const cutoff = includeOlder ? null : Timestamp.fromMillis(Date.now() - RECENT_WINDOW_DAYS * DAY_MS);
-    const windowed = (constraint) => query(collection(db, 'jobs'), constraint, ...(cutoff ? [where('createdAt', '>=', cutoff)] : []));
+    const jobsRef = collection(db, 'jobs');
+    const invoicedQuery = query(jobsRef, where('invoiceSent', '==', true), ...(cutoff ? [where('createdAt', '>=', cutoff)] : []));
+    // Descending order matches the deployed (status, createdAt DESC) index; ascending would need another one
+    const completedQuery = query(
+      jobsRef,
+      where('status', '==', 'Completed'),
+      ...(cutoff ? [where('createdAt', '>=', cutoff), orderBy('createdAt', 'desc')] : []),
+    );
     const onError = (label) => (error) => {
       console.error(`Receivables ${label} listener failed`, error);
       setAppError('Unable to load receivables data.');
     };
     const unsubscribes = [
-      onSnapshot(windowed(where('invoiceSent', '==', true)), (snapshot) => setSentJobs(toDocs(snapshot)), onError('invoiced jobs')),
-      onSnapshot(windowed(where('status', '==', 'Completed')), (snapshot) => setCompletedJobs(toDocs(snapshot)), onError('completed jobs')),
+      onSnapshot(invoicedQuery, (snapshot) => setSentJobs(toDocs(snapshot)), onError('invoiced jobs')),
+      onSnapshot(completedQuery, (snapshot) => setCompletedJobs(toDocs(snapshot)), onError('completed jobs')),
     ];
     return () => unsubscribes.forEach((unsubscribe) => unsubscribe());
   }, [includeOlder, setAppError]);
