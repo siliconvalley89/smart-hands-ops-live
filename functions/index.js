@@ -48,8 +48,19 @@ const websiteIntakeAllowed = (db, req) => {
   });
 };
 
+// Date-only inputs (YYYY-MM-DD) are Pacific calendar days; parsing them directly lands on the previous evening in Pacific time.
+const pacificDayAt8am = (dateStr) => {
+  const [year, month, day] = dateStr.split('-').map(Number);
+  const utcGuess = Date.UTC(year, month - 1, day, 8);
+  const pacificHour = Number(new Intl.DateTimeFormat('en-US', { timeZone: 'America/Los_Angeles', hour: '2-digit', hourCycle: 'h23' }).format(new Date(utcGuess)));
+  return new Date(utcGuess + (8 - pacificHour) * 60 * 60 * 1000);
+};
+
 const turnstileVerified = async (token, req) => {
-  if (typeof token !== 'string' || !token) return false;
+  if (typeof token !== 'string' || !token) {
+    console.warn('Website intake missing Turnstile token');
+    return false;
+  }
   const response = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
     method: 'POST',
     body: new URLSearchParams({
@@ -59,6 +70,7 @@ const turnstileVerified = async (token, req) => {
     }),
   });
   const result = await response.json();
+  if (result.success !== true) console.warn('Website intake Turnstile rejected', result['error-codes']);
   return result.success === true;
 };
 
@@ -1404,7 +1416,7 @@ exports.createJobFromWebsite = onRequest({ cors: ['https://www.siliconvalleysmar
     details:           scopeOfWork || '',
     serialNumber:      '',
     urgency:           urgencyLevel || '',
-    scheduledFor:      preferredStartDate ? new Date(preferredStartDate) : null,
+    scheduledFor:      preferredStartDate ? pacificDayAt8am(preferredStartDate) : null,
     status:            'Pending',
     assignedTechName:  '',
     assignedTechEmail: '',
