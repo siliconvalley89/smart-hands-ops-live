@@ -6,6 +6,7 @@ import JobPhotos from './JobPhotos';
 export default function JobMedia({
   job,
   profile,
+  now,
   uploadingPhotos,
   uploadingFiles,
   canDownloadPhotos,
@@ -25,7 +26,7 @@ export default function JobMedia({
         {uploadingPhotos && <span className="text-teal-300 normal-case tracking-normal">Uploading photo...</span>}
       </div>
       <div className="grid gap-3">
-        <JobPhotos job={job} profile={profile} photos={photos} canDownloadPhotos={canDownloadPhotos} downloadPhotos={downloadPhotos} deletePhoto={deletePhoto} handlePhotoUpload={handlePhotoUpload} />
+        <JobPhotos job={job} profile={profile} now={now} photos={photos} canDownloadPhotos={canDownloadPhotos} downloadPhotos={downloadPhotos} deletePhoto={deletePhoto} handlePhotoUpload={handlePhotoUpload} />
         <div className="rounded-2xl bg-slate-900 p-3 border border-slate-700">
           <div className="text-slate-300 text-sm mb-2 flex items-center gap-2">
             <FileText size={15} /> Files &amp; documents {files.length > 0 && `(${files.length})`}

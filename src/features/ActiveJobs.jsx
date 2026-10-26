@@ -7,7 +7,7 @@ import { downloadInvoice } from '../lib/invoice';
 import { calcInvoiceTotal } from '../lib/invoiceTotals';
 import { getReceivableStatus } from '../lib/payments';
 import { isFieldRole } from '../lib/roles';
-import { formatDate, getPhotoCount, getCheckoutBlockReason, getBreakReturnTime, getBreakStartBlock } from '../lib/jobDisplay';
+import { formatDate, getPhotoCount, getCheckoutBlockReason, getBreakReturnTime, getBreakStartBlock, isOnBreak } from '../lib/jobDisplay';
 import TechNameWithPhoto from './TechNameWithPhoto';
 import JobMedia from './JobMedia';
 import PayBalanceButton from './PayBalanceButton';
@@ -131,6 +131,7 @@ export default function ActiveJobs({
             const beforeReady = getPhotoCount(job, 'before') > 0;
             const afterReady = getPhotoCount(job, 'after') > 0;
             const canRequestSignoff = isFieldRole(profile.role) && ['Assigned', 'Dispatched', 'En Route', 'On Site'].includes(job.status) && beforeReady && afterReady && Boolean(job.checkInAt);
+            const onBreak = isOnBreak(job);
             const canClientSignoff = profile.role === 'client' && job.status === 'Ready for Signoff' && !job.clientSignedOff;
 
             const isExpanded = expandedJobIds.includes(job.id);
@@ -220,6 +221,7 @@ export default function ActiveJobs({
                     <JobMedia
                       job={job}
                       profile={profile}
+                      now={now}
                       uploadingPhotos={uploadingId === job.id}
                       uploadingFiles={uploadingFilesId === job.id}
                       canDownloadPhotos={canDownloadPhotos}
@@ -586,9 +588,12 @@ export default function ActiveJobs({
                       </label>
                     )}
                     {isFieldRole(profile.role) && canRequestSignoff && (
-                      <button onClick={() => requestClientSignoff(job)} className="rounded-2xl bg-orange-500 px-4 py-2 text-sm font-semibold text-white hover:bg-orange-400 transition flex items-center gap-2">
+                      <button onClick={() => requestClientSignoff(job)} disabled={onBreak} className="rounded-2xl bg-orange-500 px-4 py-2 text-sm font-semibold text-white hover:bg-orange-400 transition flex items-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed">
                         <FileText size={16} /> Request sign-off
                       </button>
+                    )}
+                    {isFieldRole(profile.role) && canRequestSignoff && onBreak && (
+                      <span className="self-center text-xs text-amber-300">Clock back in from break to request sign-off.</span>
                     )}
                     {profile.role === 'client' && canClientSignoff && (
                       <button onClick={() => handleClientSignoff(job)} className="rounded-2xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500 transition flex items-center gap-2">

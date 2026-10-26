@@ -25,7 +25,7 @@ import useJobs from './hooks/useJobs';
 import useTechs from './hooks/useTechs';
 import useParts from './hooks/useParts';
 import useUsers from './hooks/useUsers';
-import { getBreakReturnTime, getBreakStartBlock, getCheckoutBlockReason } from './lib/jobDisplay';
+import { getBreakReturnTime, getBreakStartBlock, getCheckoutBlockReason, isOnBreak } from './lib/jobDisplay';
 
 const ACTIVE_PAGE_SIZE = 50;
 import TechNameWithPhoto from './features/TechNameWithPhoto';
@@ -755,6 +755,10 @@ function App() {
   const requestClientSignoff = async (job) => {
     if (!job.checkInAt) {
       setAppError('You must check in on site before requesting sign-off.');
+      return;
+    }
+    if (isOnBreak(job)) {
+      setAppError('Clock back in from break before requesting sign-off.');
       return;
     }
     await updateDoc(doc(db, 'jobs', job.id), {

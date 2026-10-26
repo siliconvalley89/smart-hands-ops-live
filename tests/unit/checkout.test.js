@@ -1,13 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { getBreakReturnTime, getBreakStartBlock, getCheckoutBlockReason } from '../../src/lib/jobDisplay';
+import { getBreakReturnTime, getBreakStartBlock, getCheckoutBlockReason, getPhotoAddBlockReason, isOnBreak } from '../../src/lib/jobDisplay';
 
 const NOW = new Date('2026-10-24T18:00:00Z');
 const HOUR = 60 * 60 * 1000;
-const PHOTO_REQUIRED = 'Upload at least one after photo before checking out.';
+const PHOTO_REQUIRED = 'Upload at least one before and after photo before checking out.';
+const AFTER_REQUIRED = 'Upload at least one after photo before checking out.';
+const BEFORE_REQUIRED = 'Upload at least one before photo before checking out.';
 const BREAK_REQUIRED = 'After 5 hours on site, take a 30-minute break before checking out.';
 
 const job = (overrides = {}) => ({
-  photoCounts: { after: 1 },
+  photoCounts: { before: 1, after: 1 },
   checkInAt: new Date(NOW.getTime() - 2 * HOUR),
   breaks: [],
   ...overrides,
@@ -23,9 +25,11 @@ describe('getCheckoutBlockReason', () => {
     vi.useRealTimers();
   });
 
-  it('blocks checkout until an after photo exists', () => {
-    expect(getCheckoutBlockReason(job({ photoCounts: { after: 0 } }))).toBe(PHOTO_REQUIRED);
+  it('blocks checkout until both a before and an after photo exist', () => {
+    expect(getCheckoutBlockReason(job({ photoCounts: { before: 1, after: 0 } }))).toBe(AFTER_REQUIRED);
+    expect(getCheckoutBlockReason(job({ photoCounts: { before: 0, after: 1 } }))).toBe(BEFORE_REQUIRED);
     expect(getCheckoutBlockReason(job({ photoCounts: {} }))).toBe(PHOTO_REQUIRED);
+    expect(getCheckoutBlockReason(job())).toBe('');
   });
 
   it('allows checkout before five hours on site', () => {
@@ -62,8 +66,36 @@ describe('getCheckoutBlockReason', () => {
   });
 
   it('reports the photo requirement first when both rules fail', () => {
-    const both = job({ photoCounts: { after: 0 }, checkInAt: new Date(NOW.getTime() - 6 * HOUR) });
-    expect(getCheckoutBlockReason(both)).toBe(PHOTO_REQUIRED);
+    const both = job({ photoCounts: { before: 1, after: 0 }, checkInAt: new Date(NOW.getTime() - 6 * HOUR) });
+    expect(getCheckoutBlockReason(both)).toBe(AFTER_REQUIRED);
+  });
+});
+
+describe('getPhotoAddBlockReason', () => {
+  const CLOSED = 'The photo window for this visit has closed.';
+  const checkedOutAt = (hoursAgo) => ({ checkOutAt: new Date(NOW.getTime() - hoursAgo * HOUR) });
+
+  it('never blocks before checkout', () => {
+    expect(getPhotoAddBlockReason({}, 'tech', NOW.getTime())).toBe('');
+  });
+
+  it('gives techs and senior consultants one hour after checkout', () => {
+    expect(getPhotoAddBlockReason(checkedOutAt(0.5), 'tech', NOW.getTime())).toBe('');
+    expect(getPhotoAddBlockReason(checkedOutAt(1), 'seniorConsultant', NOW.getTime())).toBe(CLOSED);
+    expect(getPhotoAddBlockReason(checkedOutAt(2), 'tech', NOW.getTime())).toBe(CLOSED);
+  });
+
+  it('gives admins twelve hours after checkout', () => {
+    expect(getPhotoAddBlockReason(checkedOutAt(11), 'admin', NOW.getTime())).toBe('');
+    expect(getPhotoAddBlockReason(checkedOutAt(12), 'admin', NOW.getTime())).toBe(CLOSED);
+  });
+});
+
+describe('isOnBreak', () => {
+  it('is true only while a break has no end time', () => {
+    expect(isOnBreak(job({ breaks: [{ startAt: NOW }] }))).toBe(true);
+    expect(isOnBreak(job({ breaks: [{ startAt: NOW, endAt: NOW }] }))).toBe(false);
+    expect(isOnBreak(job())).toBe(false);
   });
 });
 

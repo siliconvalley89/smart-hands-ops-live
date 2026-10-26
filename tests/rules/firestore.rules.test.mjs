@@ -45,6 +45,19 @@ const SEED = [
     client: 'Acme', clientEmail: CLIENT, assignedTechEmail: TECH, status: 'On Site',
     billingMigrated: true, invoiceSent: false, clientSignedOff: false,
   }],
+  ['jobs/job-out-recent', {
+    client: 'Acme', clientEmail: CLIENT, assignedTechEmail: TECH, status: 'On Site',
+    billingMigrated: true, invoiceSent: false, clientSignedOff: false, checkOutAt: new Date(Date.now() - 30 * 60 * 1000),
+  }],
+  ['jobs/job-out-old', {
+    client: 'Acme', clientEmail: CLIENT, assignedTechEmail: TECH, status: 'On Site',
+    billingMigrated: true, invoiceSent: false, clientSignedOff: false, checkOutAt: new Date(Date.now() - 2 * 60 * 60 * 1000),
+  }],
+  ['jobs/job-out-expired', {
+    client: 'Acme', clientEmail: CLIENT, assignedTechEmail: TECH, status: 'On Site',
+    billingMigrated: true, invoiceSent: false, clientSignedOff: false, checkOutAt: new Date(Date.now() - 13 * 60 * 60 * 1000),
+  }],
+  ['jobs/job-out-old/photos/ph-old', { type: 'before', url: 'https://x/old.jpg', path: 'jobs/job-out-old/old.jpg', uploadedAt: new Date(), uploadedBy: TECH }],
   ['jobs/job-open/consumables/c1', { description: 'Cable', qty: 1 }],
   ['jobs/job-done/consumables/c2', { description: 'Clamp', qty: 2 }],
   ['jobs/job-open/photos/ph-seed', { type: 'before', url: 'https://x/seed.jpg', path: 'jobs/job-open/seed.jpg', uploadedAt: new Date(), uploadedBy: TECH }],
@@ -407,6 +420,18 @@ describe('job photos and files', () => {
 
   it('files over 10 MB are rejected', async () => {
     await assertFails(setDoc(doc(as.admin(), 'jobs/job-open/files/fi-big'), newFile({ size: 11 * 1024 * 1024 })));
+  });
+
+  it('tech adds photos for one hour after checkout, not after', async () => {
+    await assertSucceeds(setDoc(doc(as.tech(), 'jobs/job-out-recent/photos/ph-recent'), newPhoto({ type: 'after' })));
+    await assertFails(setDoc(doc(as.tech(), 'jobs/job-out-old/photos/ph-late'), newPhoto({ type: 'after' })));
+    await assertFails(deleteDoc(doc(as.tech(), 'jobs/job-out-old/photos/ph-old')));
+  });
+
+  it('admin adds photos for twelve hours after checkout, not after', async () => {
+    await assertSucceeds(setDoc(doc(as.admin(), 'jobs/job-out-old/photos/ph-admin'), newPhoto({ type: 'after', uploadedBy: ADMIN })));
+    await assertFails(setDoc(doc(as.admin(), 'jobs/job-out-expired/photos/ph-admin-late'), newPhoto({ type: 'after', uploadedBy: ADMIN })));
+    await assertFails(setDoc(doc(as.tech(), 'jobs/job-out-expired/photos/ph-tech-late'), newPhoto({ type: 'after' })));
   });
 });
 

@@ -84,6 +84,19 @@ service cloud.firestore {
           job.get('billingMigrated', false) == true && job.get('invoiceSent', false) != true);
     }
 
+    function photoWindowOpen(job, hours) {
+      return job.get('checkOutAt', null) == null ||
+        request.time < job.get('checkOutAt', null) + duration.value(hours, 'h');
+    }
+
+    function canChangeJobPhotos(jobId) {
+      let job = get(/databases/$(database)/documents/jobs/$(jobId)).data;
+      return (isAdmin() && photoWindowOpen(job, 12)) ||
+        (isVerifiedTech() && job.assignedTechEmail == request.auth.token.email &&
+          job.get('billingMigrated', false) == true && job.get('invoiceSent', false) != true &&
+          photoWindowOpen(job, 1));
+    }
+
     match /badges/{badgeId} {
       allow get: if true;
       allow list: if isAdmin();
@@ -226,7 +239,7 @@ service cloud.firestore {
 
       match /photos/{photoId} {
         allow read: if canReadJobMedia(jobId);
-        allow create: if canManageJobMedia(jobId) &&
+        allow create: if canChangeJobPhotos(jobId) &&
           request.resource.data.keys().hasOnly(['type', 'url', 'path', 'uploadedAt', 'uploadedBy']) &&
           request.resource.data.keys().hasAll(['type', 'url', 'uploadedAt', 'uploadedBy']) &&
           request.resource.data.type in ['before', 'after'] &&
@@ -235,7 +248,7 @@ service cloud.firestore {
           request.resource.data.uploadedAt is timestamp &&
           request.resource.data.uploadedBy == request.auth.token.email;
         allow update: if false;
-        allow delete: if canManageJobMedia(jobId);
+        allow delete: if canChangeJobPhotos(jobId);
       }
 
       match /files/{fileId} {

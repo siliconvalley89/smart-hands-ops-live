@@ -3,11 +3,32 @@ const { onRequest, onCall, HttpsError } = require('firebase-functions/v2/https')
 const { onSchedule } = require('firebase-functions/v2/scheduler');
 const { defineSecret } = require('firebase-functions/params');
 const admin = require('firebase-admin');
+const crypto = require('crypto');
 const { partStockAdjustments, stockChangeAlerts } = require('./stock');
 const { reminderStageFor } = require('./reminders');
 const { quoteTotalCents, quoteAcceptProblem, buildQuoteJob } = require('./quote');
 const Stripe = require('stripe');
 const { checkoutProblem, checkoutSessionParams, paymentFromCheckoutSession } = require('./stripe');
+const { validateWebsiteIntake } = require('./websiteIntake');
+
+const WEBSITE_INTAKE_LIMIT = 10;
+const WEBSITE_INTAKE_WINDOW_MS = 60 * 60 * 1000;
+
+// Cloud Functions appends the real client IP last; earlier entries are client-supplied and can be spoofed.
+const websiteIntakeAllowed = (db, req) => {
+  const clientIp = String(req.headers['x-forwarded-for'] || req.ip || 'unknown').split(',').pop().trim();
+  const ref = db.collection('websiteIntakeLimits').doc(crypto.createHash('sha256').update(clientIp).digest('hex'));
+  return db.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    const now = Date.now();
+    const current = snap.exists ? snap.data() : null;
+    const windowOpen = current && now - current.windowStartMs < WEBSITE_INTAKE_WINDOW_MS;
+    const count = windowOpen ? current.count : 0;
+    if (count >= WEBSITE_INTAKE_LIMIT) return false;
+    tx.set(ref, { count: count + 1, windowStartMs: windowOpen ? current.windowStartMs : now });
+    return true;
+  });
+};
 
 admin.initializeApp();
 
@@ -1083,17 +1104,18 @@ exports.createJobFromWebsite = onRequest({ cors: ['https://www.siliconvalleysmar
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const { fullName, companyName, serviceType, email, urgencyLevel, preferredStartDate, scopeOfWork } = req.body;
-
-  // Basic validation
-  if (!fullName || !email || !serviceType) {
-    return res.status(400).json({ error: 'fullName, email, and serviceType are required' });
-  }
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-    return res.status(400).json({ error: 'Invalid email address' });
-  }
-
   const db = admin.firestore();
+  if (!(await websiteIntakeAllowed(db, req))) {
+    return res.status(429).json({ error: 'Too many requests. Please try again later.' });
+  }
+
+  const body = req.body || {};
+  const validationError = validateWebsiteIntake(body);
+  if (validationError) {
+    return res.status(400).json({ error: validationError });
+  }
+
+  const { fullName, companyName, serviceType, email, urgencyLevel, preferredStartDate, scopeOfWork } = body;
 
   const jobData = {
     client:            fullName,

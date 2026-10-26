@@ -1,8 +1,14 @@
 import { Camera, Trash2, Plus, Download } from 'lucide-react';
+import { isFieldRole } from '../lib/roles';
+import { getPhotoAddBlockReason } from '../lib/jobDisplay';
 
-export default function JobPhotos({ job, profile, photos, canDownloadPhotos, downloadPhotos, deletePhoto, handlePhotoUpload }) {
+export default function JobPhotos({ job, profile, photos, now, canDownloadPhotos, downloadPhotos, deletePhoto, handlePhotoUpload }) {
+  const canChangePhotos = isFieldRole(profile.role) || profile.role === 'admin';
+  const addBlock = canChangePhotos ? getPhotoAddBlockReason(job, profile.role, now) : '';
+  const canAddPhotos = canChangePhotos && !addBlock;
   return (
     <>
+      {addBlock && <div className="text-xs text-amber-300">{addBlock}</div>}
       {['before', 'after'].map((type) => {
         const items = photos[type];
         const label = type === 'before' ? 'Before' : 'After';
@@ -23,7 +29,7 @@ export default function JobPhotos({ job, profile, photos, canDownloadPhotos, dow
                     <a href={photo.url} target="_blank" rel="noreferrer">
                       <img src={photo.url} alt={label} loading="lazy" decoding="async" className="w-full aspect-square rounded-xl object-cover" />
                     </a>
-                    {['tech', 'admin'].includes(profile.role) && (
+                    {canAddPhotos && (
                       <button type="button" aria-label={`Delete ${type} photo`} onClick={() => deletePhoto(job, photo)} className="absolute top-1 right-1 rounded-full border border-red-800 bg-red-950/80 p-1.5 text-red-300 hover:bg-red-900 transition">
                         <Trash2 size={13} />
                       </button>
@@ -39,7 +45,7 @@ export default function JobPhotos({ job, profile, photos, canDownloadPhotos, dow
             ) : (
               <div className="rounded-2xl border border-dashed border-slate-700 p-8 text-center text-slate-500">No photos yet</div>
             )}
-            {['tech', 'admin'].includes(profile.role) && (
+            {canAddPhotos && (
               <div className="mt-3 flex flex-wrap gap-2">
                 <label htmlFor={`${type}-cam-${job.id}`} className="cursor-pointer inline-flex items-center gap-2 rounded-2xl border border-slate-600 bg-slate-800 px-3 py-2 text-sm text-slate-200 hover:bg-slate-700 transition">
                   <Camera size={15} /> Take photo
