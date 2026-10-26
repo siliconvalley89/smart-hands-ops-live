@@ -19,20 +19,29 @@ const { parseStaffAccount } = require('./accounts');
 const { FREQUENCIES, advanceOccurrence, dueOccurrences } = require('./contracts');
 
 const WEBSITE_INTAKE_LIMIT = 10;
+const WEBSITE_INTAKE_GLOBAL_LIMIT = 50;
 const WEBSITE_INTAKE_WINDOW_MS = 60 * 60 * 1000;
+
+function nextIntakeWindow(current, limit, now) {
+  const windowOpen = current && now - current.windowStartMs < WEBSITE_INTAKE_WINDOW_MS;
+  const count = windowOpen ? current.count : 0;
+  if (count >= limit) return null;
+  return { count: count + 1, windowStartMs: windowOpen ? current.windowStartMs : now };
+}
 
 // Cloud Functions appends the real client IP last; earlier entries are client-supplied and can be spoofed.
 const websiteIntakeAllowed = (db, req) => {
   const clientIp = String(req.headers['x-forwarded-for'] || req.ip || 'unknown').split(',').pop().trim();
-  const ref = db.collection('websiteIntakeLimits').doc(crypto.createHash('sha256').update(clientIp).digest('hex'));
+  const ipRef = db.collection('websiteIntakeLimits').doc(crypto.createHash('sha256').update(clientIp).digest('hex'));
+  const globalRef = db.collection('websiteIntakeLimits').doc('global');
   return db.runTransaction(async (tx) => {
-    const snap = await tx.get(ref);
+    const [ipSnap, globalSnap] = await Promise.all([tx.get(ipRef), tx.get(globalRef)]);
     const now = Date.now();
-    const current = snap.exists ? snap.data() : null;
-    const windowOpen = current && now - current.windowStartMs < WEBSITE_INTAKE_WINDOW_MS;
-    const count = windowOpen ? current.count : 0;
-    if (count >= WEBSITE_INTAKE_LIMIT) return false;
-    tx.set(ref, { count: count + 1, windowStartMs: windowOpen ? current.windowStartMs : now });
+    const ip = nextIntakeWindow(ipSnap.data(), WEBSITE_INTAKE_LIMIT, now);
+    const global = nextIntakeWindow(globalSnap.data(), WEBSITE_INTAKE_GLOBAL_LIMIT, now);
+    if (!ip || !global) return false;
+    tx.set(ipRef, ip);
+    tx.set(globalRef, global);
     return true;
   });
 };
