@@ -584,6 +584,19 @@ describe('quotes', () => {
     await assertFails(setDoc(doc(as.assistant(), 'quotes/q-extra'), validQuote({ jobId: 'job-x', status: 'Draft', total: 1 })));
   });
 
+  it('stores site coordinates only as numbers or null', async () => {
+    await assertSucceeds(setDoc(doc(as.assistant(), 'quotes/q-geo'), validQuote({ lat: 37.37, lng: -121.92 })));
+    await assertSucceeds(setDoc(doc(as.assistant(), 'quotes/q-geo-null'), validQuote({ lat: null, lng: null })));
+    await assertFails(setDoc(doc(as.assistant(), 'quotes/q-geo-text'), validQuote({ lat: '37.37', lng: -121.92 })));
+  });
+
+  it('sending a draft can record its site coordinates', async () => {
+    await seedQuote('q-geo-send');
+    await assertSucceeds(updateDoc(doc(as.admin(), 'quotes/q-geo-send'), {
+      status: 'Sent', sentAt: new Date(), lat: 37.37, lng: -121.92, updatedBy: ADMIN,
+    }));
+  });
+
   it('client reads only their own sent or accepted quotes, never drafts', async () => {
     await seedQuote('q-draft');
     await seedQuote('q-sent', { status: 'Sent' });
@@ -756,5 +769,50 @@ describe('tech breaks', () => {
     const second = closedBreak(new Date(Date.now() - 1 * HOUR));
     await setBreaks([first, second], new Date(Date.now() - 15 * HOUR));
     await assertFails(techUpdate({ breaks: [first, second, { startAt: new Date() }] }));
+  });
+});
+
+describe('tech checkout and sign-off gates', () => {
+  const MIN = 60 * 1000;
+  const HOUR = 60 * MIN;
+  const seedOnsite = (fields) => testEnv.withSecurityRulesDisabled(async (context) => {
+    await setDoc(doc(context.firestore(), 'jobs/job-onsite'), {
+      client: 'Acme', clientEmail: CLIENT, assignedTechEmail: TECH, status: 'On Site',
+      billingMigrated: true, invoiceSent: false, clientSignedOff: false, ...fields,
+    });
+  });
+  const techUpdate = (fields) => updateDoc(doc(as.tech(), 'jobs/job-onsite'), {
+    updatedBy: TECH, updatedAt: new Date(), ...fields,
+  });
+
+  it('tech cannot check out without both a before and an after photo', async () => {
+    await seedOnsite({ checkInAt: new Date(), photoCounts: { before: 1, after: 0 } });
+    await assertFails(techUpdate({ checkOutAt: new Date() }));
+    await seedOnsite({ checkInAt: new Date() });
+    await assertFails(techUpdate({ checkOutAt: new Date() }));
+  });
+
+  it('tech can check out once both a before and an after photo exist', async () => {
+    await seedOnsite({ checkInAt: new Date(), photoCounts: { before: 2, after: 1 } });
+    await assertSucceeds(techUpdate({ checkOutAt: new Date() }));
+  });
+
+  it('tech cannot request sign-off while a break is running', async () => {
+    await seedOnsite({ checkInAt: new Date(Date.now() - 2 * HOUR), breaks: [{ startAt: new Date() }] });
+    await assertFails(techUpdate({ status: 'Ready for Signoff', signoffRequestedAt: new Date() }));
+  });
+
+  it('tech can request sign-off after clocking back in from a break', async () => {
+    const startAt = new Date(Date.now() - 31 * MIN);
+    await seedOnsite({
+      checkInAt: new Date(Date.now() - 2 * HOUR),
+      breaks: [{ startAt, endAt: new Date(startAt.getTime() + 30 * MIN) }],
+    });
+    await assertSucceeds(techUpdate({ status: 'Ready for Signoff', signoffRequestedAt: new Date() }));
+  });
+
+  it('tech cannot request sign-off without a check-in', async () => {
+    await seedOnsite({});
+    await assertFails(techUpdate({ status: 'Ready for Signoff', signoffRequestedAt: new Date() }));
   });
 });

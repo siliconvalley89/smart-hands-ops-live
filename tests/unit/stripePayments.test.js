@@ -2,7 +2,7 @@ import { createRequire } from 'node:module';
 import { describe, expect, it } from 'vitest';
 
 const require = createRequire(import.meta.url);
-const { APP_URL, checkoutProblem, checkoutSessionParams, paymentFromCheckoutSession } = require('../../functions/stripe.js');
+const { APP_URL, checkoutAction, checkoutProblem, checkoutSessionParams, paymentFromCheckoutSession } = require('../../functions/stripe.js');
 
 const payable = { billingMigrated: true, invoiceSent: true, clientEmail: 'client@test.dev', task: 'Rack install' };
 
@@ -67,4 +67,37 @@ describe('paymentFromCheckoutSession', () => {
   it('falls back to the session id when there is no payment intent', () => {
     expect(paymentFromCheckoutSession({ id: 'cs_2', amount_total: 500, created: 1 }).reference).toBe('cs_2');
   });
+
+  it('records US bank payments as ACH', () => {
+    expect(paymentFromCheckoutSession({ id: 'cs_3', amount_total: 500, created: 1 }, 'us_bank_account').method).toBe('ach');
+  });
 });
+
+describe('checkoutAction', () => {
+  const open = (amount_total) => ({ id: 'cs_open', status: 'open', amount_total });
+  const base = { amountCents: 5000, paymentRecorded: false, paymentFailed: false };
+
+  it('creates a session when there is none or the last one expired', () => {
+    expect(checkoutAction(null, base)).toBe('create');
+    expect(checkoutAction({ id: 'cs_old', status: 'expired', amount_total: 5000 }, base)).toBe('create');
+  });
+
+  it('reuses an open session for the same amount', () => {
+    expect(checkoutAction(open(5000), base)).toBe('reuse');
+  });
+
+  it('expires an open session when the balance has changed', () => {
+    expect(checkoutAction(open(4000), base)).toBe('expire');
+  });
+
+  it('blocks a completed session whose payment is still settling or not yet recorded', () => {
+    expect(checkoutAction({ id: 'cs_done', status: 'complete', amount_total: 5000 }, base)).toBe('block');
+  });
+
+  it('allows a new session once the completed payment is recorded or has failed', () => {
+    const complete = { id: 'cs_done', status: 'complete', amount_total: 5000 };
+    expect(checkoutAction(complete, { ...base, paymentRecorded: true })).toBe('create');
+    expect(checkoutAction(complete, { ...base, paymentFailed: true })).toBe('create');
+  });
+});
+

@@ -14,8 +14,9 @@ import {
   sendPasswordResetEmail,
 } from 'firebase/auth';
 import logoPath from './assets/sv-smart-dispatch-logo.jpg';
-import { isJobDispatched, isJobAssigned, isJobMovable, formatSchedule, findTechConflict, getJobWindow, JOB_WINDOW_MS } from './lib/jobTime';
+import { isJobDispatched, isJobAssigned, isJobMovable, findTechConflict, conflictMessage, getJobWindow, JOB_WINDOW_MS } from './lib/jobTime';
 import { calculateDistanceMiles } from './lib/geo';
+import { geocodeAddress } from './lib/geocode';
 import { MAX_ATTACHMENT_BYTES, ATTACHMENT_ACCEPT, PHOTO_MAX_DIMENSION, PHOTO_JPEG_QUALITY, downloadPhotoFile, fileToSquareDataUrl, compressPhotoForUpload } from './lib/media';
 import { prepareBadge, generateBadgePdf } from './lib/badge';
 import { uploadInvoicePdf } from './lib/invoice';
@@ -38,6 +39,7 @@ import ReportsPanel from './features/ReportsPanel';
 import PartsInventory from './features/PartsInventory';
 import QuotesPanel from './features/QuotesPanel';
 import ClientQuotes from './features/ClientQuotes';
+import PaymentReturnBanner from './features/PaymentReturnBanner';
 import CompletedJobs from './features/CompletedJobs';
 import RequestForm from './features/RequestForm';
 import Accounts from './features/Accounts';
@@ -237,34 +239,6 @@ function App() {
     await firebaseSignOut(auth);
     setProfile(null);
     setFirebaseUser(null);
-  };
-
-  const geocodeAddress = async (address) => {
-    const search = async (query) => {
-      const response = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=1`);
-      const results = await response.json();
-      return results && results.length > 0 ? results[0] : null;
-    };
-
-    // Floor/suite/unit details confuse the geocoder, so retry without them
-    const unitPattern = /[,\s]*(?:#\s*\w+|\b(?:suite|ste|unit|apt|apartment|floor|fl|room|rm|bldg|building)\b\.?\s*#?\s*\w+|\b\d+(?:st|nd|rd|th)\s+floor\b)/gi;
-    const unitParts = address.match(unitPattern) || [];
-    const stripped = address.replace(unitPattern, '').replace(/\s{2,}/g, ' ').replace(/\s+,/g, ',').trim();
-
-    let location = await search(address);
-    let unitSuffix = '';
-    if (!location && stripped && stripped !== address) {
-      location = await search(stripped);
-      unitSuffix = unitParts.map((part) => part.replace(/^[,\s]+/, '')).join(', ');
-    }
-    if (!location) {
-      throw new Error('Unable to locate that address.');
-    }
-    return {
-      lat: Number(location.lat),
-      lng: Number(location.lon),
-      displayName: unitSuffix ? `${unitSuffix}, ${location.display_name}` : location.display_name,
-    };
   };
 
   const submitRequest = async (event) => {
@@ -1001,9 +975,8 @@ function App() {
 
     const conflict = canStaffManage ? findTechConflict(job, tech.email, jobs) : null;
     if (conflict) {
-      const when = conflict.scheduledFor ? formatSchedule(conflict) : 'now';
-      const confirmed = await askConfirm(`${tech.name} is already assigned to another job (${conflict.client || conflict.task || 'job'}, ${when}) during this window. Assign them to this job anyway?`, 'Assign anyway');
-      if (!confirmed) return;
+      setAppError(conflictMessage(tech.name, conflict));
+      return;
     }
 
     try {
@@ -1036,9 +1009,8 @@ function App() {
 
     const conflict = findTechConflict({ ...job, scheduledFor: startMs, scheduledEnd: endMs }, tech.email, jobs);
     if (conflict) {
-      const when = conflict.scheduledFor ? formatSchedule(conflict) : 'now';
-      const confirmed = await askConfirm(`${tech.name} is already assigned to another job (${conflict.client || conflict.task || 'job'}, ${when}) during this window. Move this job here anyway?`, 'Move anyway');
-      if (!confirmed) return;
+      setAppError(conflictMessage(tech.name, conflict));
+      return;
     }
 
     try {
@@ -1435,6 +1407,8 @@ function App() {
             ))}
           </nav>
         )}
+
+        {profile.role === 'client' && <PaymentReturnBanner />}
 
         {(canStaffManage || profile.role === 'client') && showStaffTab('jobs') && (
           <RequestForm

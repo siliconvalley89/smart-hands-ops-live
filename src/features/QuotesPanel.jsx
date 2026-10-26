@@ -3,6 +3,7 @@ import { addDoc, collection, deleteDoc, doc, updateDoc } from 'firebase/firestor
 import { db } from '../firebase';
 import useQuotes from '../hooks/useQuotes';
 import { isQuoteExpired, quoteTotal } from '../lib/quotes';
+import { geocodeAddress } from '../lib/geocode';
 
 const DEFAULT_VALID_DAYS = 30;
 const MAX_LINES = 50;
@@ -75,6 +76,18 @@ const toPayload = (form) => ({
   validUntil: endOfDay(form.validUntil),
 });
 
+const locateSite = async (location) => {
+  const address = location.trim();
+  if (!address) return { lat: null, lng: null };
+  try {
+    const { lat, lng } = await geocodeAddress(address);
+    return Number.isFinite(lat) && Number.isFinite(lng) ? { lat, lng } : { lat: null, lng: null };
+  } catch (error) {
+    console.warn('Quote location lookup failed', error);
+    return { lat: null, lng: null };
+  }
+};
+
 export default function QuotesPanel({ email, isAdmin }) {
   const quotes = useQuotes({ staff: true });
   const [expanded, setExpanded] = useState(false);
@@ -126,10 +139,14 @@ export default function QuotesPanel({ email, isAdmin }) {
       const id = await writeDraft();
       setEditingId(id);
       if (send) {
-        await updateDoc(doc(db, 'quotes', id), { status: 'Sent', sentAt: new Date(), updatedBy: email, updatedAt: new Date() });
+        const site = await locateSite(form.location);
+        await updateDoc(doc(db, 'quotes', id), { status: 'Sent', sentAt: new Date(), ...site, updatedBy: email, updatedAt: new Date() });
+        closeForm();
+        setMessage(site.lat === null && form.location.trim() ? 'Quote sent. The location could not be mapped, so an accepted job will need manual scheduling.' : 'Quote sent to the client.');
+        return;
       }
       closeForm();
-      setMessage(send ? 'Quote sent to the client.' : 'Draft saved.');
+      setMessage('Draft saved.');
     } catch (err) {
       console.error('Save quote failed', err);
       setMessage('Unable to save quote.');

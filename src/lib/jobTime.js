@@ -72,6 +72,11 @@ export const getDayPlacement = (window, day) => {
   return { top: (start - boardStart) / 60000, height: (end - start) / 60000 };
 };
 
+export const conflictMessage = (techName, conflict) => {
+  const when = conflict.scheduledFor ? formatSchedule(conflict) : 'now';
+  return `${techName} is already booked on ${conflict.client || conflict.task || 'another job'} (${when}) during this window. Choose a different time or technician.`;
+};
+
 export const findTechConflict = (targetJob, techEmail, allJobs) => {
   if (!techEmail) return null;
   const now = Date.now();

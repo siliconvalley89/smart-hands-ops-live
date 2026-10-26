@@ -102,7 +102,13 @@ describe('buildQuoteJob', () => {
     });
   });
 
-  it('leaves the job without coordinates so no technician is auto-assigned', () => {
+  it('carries the site coordinates from the quote so the job can be auto-assigned', () => {
+    const located = buildQuoteJob(sentQuote({ lat: 37.37, lng: -121.92 }), { quoteId: 'q1', acceptedBy: 'client@test.dev', now });
+    expect(located.job.lat).toBe(37.37);
+    expect(located.job.lng).toBe(-121.92);
+  });
+
+  it('leaves coordinates null when the quote could not be located', () => {
     expect(built.job.lat).toBeNull();
     expect(built.job.lng).toBeNull();
   });

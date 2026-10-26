@@ -3,7 +3,7 @@ import { collection, doc, onSnapshot, query, where, writeBatch } from 'firebase/
 import { CalendarClock } from 'lucide-react';
 import { auth, db } from '../firebase';
 import { formatDate } from '../lib/jobDisplay';
-import { findTechConflict, formatSchedule, toMillis } from '../lib/jobTime';
+import { conflictMessage, findTechConflict, formatSchedule, toMillis } from '../lib/jobTime';
 import { approvedScheduleFields, jobWindowMs, localInputToMillis, toDateTimeLocal } from '../lib/reschedule';
 
 const MOVABLE_STATUSES = ['Pending', 'Assigned', 'Dispatched'];
@@ -74,9 +74,8 @@ export default function RescheduleRequests({ activeJobs, jobs, askConfirm, setAp
       ? findTechConflict({ ...job, scheduledFor: startMs, scheduledEnd: endMs }, job.assignedTechEmail, jobs)
       : null;
     if (conflict) {
-      const when = conflict.scheduledFor ? formatSchedule(conflict) : 'now';
-      const confirmed = await askConfirm(`${job.assignedTechName || 'This technician'} is already assigned to another job (${conflict.client || conflict.task || 'job'}, ${when}) during the new window. Approve anyway?`, 'Approve anyway');
-      if (!confirmed) return;
+      setAppError(conflictMessage(job.assignedTechName || 'This technician', conflict));
+      return;
     }
     await resolve(request, 'Approved', {
       ...approvedScheduleFields(job, startMs),

@@ -12,7 +12,7 @@ const { partStockAdjustments, stockChangeAlerts } = require('./stock');
 const { reminderStageFor } = require('./reminders');
 const { quoteTotalCents, quoteAcceptProblem, buildQuoteJob } = require('./quote');
 const Stripe = require('stripe');
-const { checkoutProblem, checkoutSessionParams, paymentFromCheckoutSession } = require('./stripe');
+const { checkoutAction, checkoutProblem, checkoutSessionParams, paymentFromCheckoutSession } = require('./stripe');
 const { validateWebsiteIntake } = require('./websiteIntake');
 
 const WEBSITE_INTAKE_LIMIT = 10;
@@ -919,16 +919,43 @@ exports.createPaymentCheckout = onCall({ secrets: [stripeSecretKey] }, async (re
   const problem = checkoutProblem({ job, balanceCents });
   if (problem) throw new HttpsError('failed-precondition', problem);
 
+  const db = getFirestore();
+  const billingRef = db.collection('jobBilling').doc(jobId);
+  const { openCheckout } = (await billingRef.get()).data() || {};
   const stripe = new Stripe(stripeSecretKey.value());
+  let previous = null;
+  if (openCheckout?.sessionId) {
+    previous = await stripe.checkout.sessions.retrieve(openCheckout.sessionId);
+    const paymentRecorded = (await snap.ref.collection('payments').doc(`stripe_${previous.id}`).get()).exists;
+    const action = checkoutAction(previous, {
+      amountCents: balanceCents,
+      paymentRecorded,
+      paymentFailed: openCheckout.paymentFailed === true,
+    });
+    if (action === 'reuse') return { url: previous.url };
+    if (action === 'block') {
+      throw new HttpsError('failed-precondition', 'A payment for this invoice is already processing. Your balance will update once it posts.');
+    }
+    if (action === 'expire') await stripe.checkout.sessions.expire(previous.id);
+  }
+
   const session = await stripe.checkout.sessions.create(
     checkoutSessionParams({ jobId, job, amountCents: balanceCents }),
-    { idempotencyKey: `checkout-${jobId}-${balanceCents}-${Math.floor(Date.now() / (10 * 60 * 1000))}` },
+    { idempotencyKey: `checkout-${jobId}-${balanceCents}-${previous?.id || 'none'}-${Math.floor(Date.now() / (10 * 60 * 1000))}` },
   );
+  // An idempotent replay can return a session that has already settled; the client should retry in a few minutes
+  if (session.status !== 'open') throw new HttpsError('unavailable', 'Please try again in a few minutes.');
+  await billingRef.update({ openCheckout: { sessionId: session.id } });
   return { url: session.url };
 });
 
+async function paymentMethodTypeOf(stripe, session) {
+  const intent = await stripe.paymentIntents.retrieve(session.payment_intent, { expand: ['payment_method'] });
+  return intent.payment_method?.type || 'card';
+}
+
 // Returns true only the first time a session is recorded, so Stripe retries never double-count
-async function recordCheckoutPayment(session) {
+async function recordCheckoutPayment(session, paymentMethodType) {
   const jobId = session.metadata?.jobId || session.client_reference_id;
   if (!jobId) return false;
   const db = getFirestore();
@@ -939,7 +966,7 @@ async function recordCheckoutPayment(session) {
     if (!jobSnap.exists) throw new Error(`Paid job ${jobId} not found`);
     if (existing.exists) return false;
     tx.set(paymentRef, {
-      ...paymentFromCheckoutSession(session),
+      ...paymentFromCheckoutSession(session, paymentMethodType),
       recordedAt: FieldValue.serverTimestamp(),
       recordedBy: 'stripe',
       voided: false,
@@ -961,13 +988,25 @@ exports.stripeWebhook = onRequest({ secrets: [stripeSecretKey, stripeWebhookSecr
     res.status(400).send('Invalid signature');
     return;
   }
-  if (event.type === 'checkout.session.completed' && event.data.object.payment_status === 'paid') {
-    const session = event.data.object;
-    if (await recordCheckoutPayment(session)) {
-      const { amount } = paymentFromCheckoutSession(session);
-      await notifyAdmins(session.metadata?.jobId || session.client_reference_id, {
+  const session = event.data.object;
+  const jobId = session.metadata?.jobId || session.client_reference_id;
+  if (event.type === 'checkout.session.async_payment_failed') {
+    await getFirestore().collection('jobBilling').doc(jobId).update({ 'openCheckout.paymentFailed': true });
+    await notifyAdmins(jobId, {
+      title: 'Bank payment failed',
+      body: 'A bank transfer for an invoice did not clear.',
+      tag: `payment-failed-${session.id}`,
+    });
+  } else if (
+    (event.type === 'checkout.session.completed' || event.type === 'checkout.session.async_payment_succeeded') &&
+    session.payment_status === 'paid'
+  ) {
+    const methodType = await paymentMethodTypeOf(stripe, session);
+    if (await recordCheckoutPayment(session, methodType)) {
+      const { amount, method } = paymentFromCheckoutSession(session, methodType);
+      await notifyAdmins(jobId, {
         title: 'Online payment received',
-        body: `$${amount.toFixed(2)} paid by card`,
+        body: `$${amount.toFixed(2)} paid by ${method === 'ach' ? 'bank transfer' : 'card'}`,
         tag: `payment-${session.id}`,
       });
     }

@@ -30,7 +30,7 @@ export default function PayBalanceButton({ job, role, balance }) {
         disabled={busy}
         className="rounded-2xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500 transition flex items-center gap-2 disabled:opacity-60"
       >
-        <CreditCard size={16} /> {busy ? 'Opening secure checkout…' : `Pay $${balance.toFixed(2)} by card`}
+        <CreditCard size={16} /> {busy ? 'Opening secure checkout…' : `Pay $${balance.toFixed(2)} online`}
       </button>
       {error && <div className="text-xs text-red-300">{error}</div>}
     </div>

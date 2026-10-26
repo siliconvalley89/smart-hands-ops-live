@@ -69,6 +69,16 @@ service cloud.firestore {
           request.time >= before[last].startAt + duration.value(30, 'm')));
     }
 
+    function noOpenBreak(data) {
+      let breaks = data.get('breaks', []);
+      return breaks.size() == 0 || breaks[breaks.size() - 1].get('endAt', null) != null;
+    }
+
+    function hasBeforeAndAfterPhotos(data) {
+      let counts = data.get('photoCounts', {});
+      return counts.get('before', 0) >= 1 && counts.get('after', 0) >= 1;
+    }
+
     function canReadJobMedia(jobId) {
       let job = get(/databases/$(database)/documents/jobs/$(jobId)).data;
       return isAdmin() ||
@@ -206,7 +216,13 @@ service cloud.firestore {
             request.resource.data.get('checkInTechEmail', '') == request.auth.token.email) &&
           request.resource.data.get('updatedBy', '') == request.auth.token.email &&
           request.resource.data.status in ['Assigned', 'Dispatched', 'En Route', 'On Site', 'Ready for Signoff'] &&
-          breakChangeAllowed()) ||
+          breakChangeAllowed() &&
+          // Checkout requires a before and an after photo, matching the app's checkout gate
+          (request.resource.data.get('checkOutAt', null) == null || resource.data.get('checkOutAt', null) != null ||
+            hasBeforeAndAfterPhotos(resource.data)) &&
+          // Sign-off requests need a check-in and no break still running
+          (request.resource.data.status != 'Ready for Signoff' || resource.data.status == 'Ready for Signoff' ||
+            (request.resource.data.get('checkInAt', null) != null && noOpenBreak(request.resource.data)))) ||
         // Clients can only sign off their own job once work is ready; admins mark it Completed
         (isVerifiedClient() && resource.data.clientEmail == request.auth.token.email &&
           resource.data.status == 'Ready for Signoff' &&
@@ -314,7 +330,7 @@ service cloud.firestore {
       return quote.keys().hasOnly([
         'client', 'clientEmail', 'clientPhone', 'location', 'task', 'details', 'lines',
         'serviceFee', 'serviceFeeDescription', 'status', 'validUntil', 'createdAt', 'createdBy',
-        'updatedBy', 'updatedAt', 'sentAt', 'acceptedAt', 'jobId'
+        'updatedBy', 'updatedAt', 'sentAt', 'acceptedAt', 'jobId', 'lat', 'lng'
       ]) &&
         quote.keys().hasAll(['client', 'clientEmail', 'lines', 'serviceFee', 'status', 'validUntil', 'createdBy', 'updatedBy']) &&
         quote.client is string &&
@@ -323,7 +339,9 @@ service cloud.firestore {
         quote.serviceFee is number && quote.serviceFee >= 0 &&
         quote.get('serviceFeeDescription', '') is string &&
         quote.status in ['Draft', 'Sent', 'Withdrawn'] &&
-        quote.validUntil is timestamp;
+        quote.validUntil is timestamp &&
+        (quote.get('lat', null) == null || quote.lat is number) &&
+        (quote.get('lng', null) == null || quote.lng is number);
     }
 
     match /quotes/{quoteId} {
