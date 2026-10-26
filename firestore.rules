@@ -175,6 +175,8 @@ service cloud.firestore {
         (isVerifiedClient() &&
           request.resource.data.clientEmail == request.auth.token.email &&
           request.resource.data.status == 'Pending' &&
+          request.resource.data.get('invoiceSent', false) == false &&
+          request.resource.data.get('clientSignedOff', false) == false &&
           request.resource.data.createdByRole == 'client' &&
           jobHasNoEmbeddedBilling(request.resource.data) &&
           request.resource.data.keys().hasOnly([

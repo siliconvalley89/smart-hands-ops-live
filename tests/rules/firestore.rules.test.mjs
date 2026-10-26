@@ -179,6 +179,11 @@ describe('jobs', () => {
     await assertFails(setDoc(doc(as.client(), 'jobs/new-client-2'), newJob({ createdByRole: 'client', updatedBy: CLIENT, status: 'Assigned' })));
   });
 
+  it('client cannot create a job already marked invoiced or signed off', async () => {
+    await assertFails(setDoc(doc(as.client(), 'jobs/new-client-7'), newJob({ createdByRole: 'client', updatedBy: CLIENT, invoiceSent: true })));
+    await assertFails(setDoc(doc(as.client(), 'jobs/new-client-8'), newJob({ createdByRole: 'client', updatedBy: CLIENT, clientSignedOff: true })));
+  });
+
   it('client cannot pick a technician when creating a job', async () => {
     await assertFails(setDoc(doc(as.client(), 'jobs/new-client-3'), newJob({
       createdByRole: 'client', updatedBy: CLIENT, assignedTechEmail: TECH, assignedTechName: 'Tia',

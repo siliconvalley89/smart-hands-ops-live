@@ -21,6 +21,11 @@ service firebase.storage {
       return 'invoiceSent' in job && job.invoiceSent == true;
     }
 
+    // Files are served from the storage domain, so active content (HTML, SVG, scripts) is never accepted
+    function isNotActiveContent() {
+      return !(request.resource.contentType in ['text/html', 'application/xhtml+xml', 'image/svg+xml', 'text/javascript', 'application/javascript']);
+    }
+
     function canReadJobMedia(jobId) {
       return role() == 'admin' ||
         (role() == 'adminAssistant' && jobData(jobId).status != 'Completed' && isMigrated(jobData(jobId))) ||
@@ -36,12 +41,12 @@ service firebase.storage {
 
     match /jobs/{jobId}/{fileName} {
       allow read: if request.auth != null && canReadJobMedia(jobId);
-      allow create, update: if request.auth != null && canManageJobMedia(jobId) && request.resource.size < 10 * 1024 * 1024;
+      allow create, update: if request.auth != null && canManageJobMedia(jobId) && request.resource.size < 10 * 1024 * 1024 && isNotActiveContent();
       allow delete: if request.auth != null && canManageJobMedia(jobId);
     }
     match /users/{userId}/profile-photo {
-      allow read: if request.auth != null;
-      allow write: if request.auth != null && request.auth.uid == userId && request.resource.size < 5 * 1024 * 1024;
+      allow read: if request.auth != null && request.auth.token.email_verified == true && 'role' in request.auth.token && request.auth.token.role != null;
+      allow write: if request.auth != null && request.auth.uid == userId && request.resource.size < 5 * 1024 * 1024 && request.resource.contentType.matches('image/.*');
     }
     match /invoices/{fileName} {
       allow read: if request.auth != null && request.auth.token.role == 'admin';

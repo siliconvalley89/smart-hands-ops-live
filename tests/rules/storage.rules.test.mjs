@@ -157,3 +157,56 @@ describe('job media reads', () => {
     await assertFails(getBytes(ref(storage, 'jobs/job-done/seed.jpg')));
   });
 });
+
+describe('active content and profile photos', () => {
+  const html = { contentType: 'text/html' };
+  const jpeg = { contentType: 'image/jpeg' };
+
+  it('admin cannot upload active content to a job', async () => {
+    const storage = staff('admin', ADMIN).storage();
+    await assertFails(uploadBytes(ref(storage, 'jobs/job-open/page.html'), bytes(), html));
+    await assertFails(uploadBytes(ref(storage, 'jobs/job-open/drawing.svg'), bytes(), { contentType: 'image/svg+xml' }));
+  });
+
+  it('admin can upload a PDF to a job', async () => {
+    const storage = staff('admin', ADMIN).storage();
+    await assertSucceeds(uploadBytes(ref(storage, 'jobs/job-open/report.pdf'), bytes(), { contentType: 'application/pdf' }));
+  });
+
+  it('user uploads an image as their own profile photo', async () => {
+    const storage = staff('client', CLIENT).storage();
+    await assertSucceeds(uploadBytes(ref(storage, 'users/client-uid/profile-photo'), bytes(), jpeg));
+  });
+
+  it('user cannot upload a non-image as a profile photo', async () => {
+    const storage = staff('client', CLIENT).storage();
+    await assertFails(uploadBytes(ref(storage, 'users/client-uid/profile-photo'), bytes(), html));
+  });
+
+  it('user cannot write another user profile photo', async () => {
+    const storage = staff('client', CLIENT).storage();
+    await assertFails(uploadBytes(ref(storage, 'users/tech-uid/profile-photo'), bytes(), jpeg));
+  });
+
+  it('verified role holder reads a profile photo', async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await uploadBytes(ref(ctx.storage(), 'users/tech-uid/profile-photo'), bytes(), jpeg);
+    });
+    await assertSucceeds(getBytes(ref(staff('client', OTHER_CLIENT).storage(), 'users/tech-uid/profile-photo')));
+  });
+
+  it('unverified user cannot read a profile photo', async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await uploadBytes(ref(ctx.storage(), 'users/tech-uid/profile-photo'), bytes(), jpeg);
+    });
+    await assertFails(getBytes(ref(staff('client', OTHER_CLIENT, false).storage(), 'users/tech-uid/profile-photo')));
+  });
+
+  it('signed-in user without a role cannot read a profile photo', async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await uploadBytes(ref(ctx.storage(), 'users/tech-uid/profile-photo'), bytes(), jpeg);
+    });
+    const storage = testEnv.authenticatedContext('norole-uid', { email: 'norole@test.dev', email_verified: true }).storage();
+    await assertFails(getBytes(ref(storage, 'users/tech-uid/profile-photo')));
+  });
+});
