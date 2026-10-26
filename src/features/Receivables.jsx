@@ -39,6 +39,12 @@ export default function Receivables({ recordedBy, setAppError }) {
   const [formError, setFormError] = useState('');
   const [saving, setSaving] = useState(false);
   const [voidTarget, setVoidTarget] = useState(null);
+  const [nowMs, setNowMs] = useState(() => Date.now());
+
+  useEffect(() => {
+    const timer = setInterval(() => setNowMs(Date.now()), 60_000);
+    return () => clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     const onError = (label) => (error) => {
@@ -62,7 +68,6 @@ export default function Receivables({ recordedBy, setAppError }) {
     return () => unsubscribes.forEach((unsubscribe) => unsubscribe());
   }, [setAppError]);
 
-  const nowMs = Date.now();
   const rows = invoicedJobs.map((job) => {
     const billing = billingByJob[job.id] || {};
     const consumables = (consumablesByJob[job.id] || []).map((item) => ({

@@ -186,15 +186,20 @@ function App() {
 
   const users = useUsers(profile);
 
-  useEffect(() => {
-    if (profile?.role === 'client') {
+  const clientPrefill = profile?.role === 'client'
+    ? [profile.displayName || '', profile.email || firebaseUser?.email || ''].join('\n')
+    : null;
+  const [appliedClientPrefill, setAppliedClientPrefill] = useState(null);
+  if (clientPrefill !== appliedClientPrefill) {
+    setAppliedClientPrefill(clientPrefill);
+    if (clientPrefill !== null) {
       setRequestForm((prev) => ({
         ...prev,
         name: profile.displayName || prev.name,
         email: profile.email || firebaseUser?.email || prev.email,
       }));
     }
-  }, [profile?.role, profile?.displayName, profile?.email, firebaseUser?.email]);
+  }
 
   const login = async () => {
     setLoginError('');

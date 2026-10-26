@@ -2,7 +2,11 @@ const { onDocumentCreated, onDocumentUpdated, onDocumentWritten } = require('fir
 const { onRequest, onCall, HttpsError } = require('firebase-functions/v2/https');
 const { onSchedule } = require('firebase-functions/v2/scheduler');
 const { defineSecret } = require('firebase-functions/params');
-const admin = require('firebase-admin');
+const { initializeApp } = require('firebase-admin/app');
+const { getFirestore, FieldValue, Timestamp } = require('firebase-admin/firestore');
+const { getAuth } = require('firebase-admin/auth');
+const { getStorage } = require('firebase-admin/storage');
+const { getMessaging } = require('firebase-admin/messaging');
 const crypto = require('crypto');
 const { partStockAdjustments, stockChangeAlerts } = require('./stock');
 const { reminderStageFor } = require('./reminders');
@@ -30,7 +34,7 @@ const websiteIntakeAllowed = (db, req) => {
   });
 };
 
-admin.initializeApp();
+initializeApp();
 
 // ── EmailJS secrets ───────────────────────────────────────────────────────────
 // Set once via:
@@ -55,7 +59,7 @@ async function sendDispatchNotification(jobId, job) {
   if (!job.assignedTechEmail) return;
 
   const targets = await getPushTargets(
-    admin.firestore().collection('users').where('email', '==', job.assignedTechEmail).limit(1)
+    getFirestore().collection('users').where('email', '==', job.assignedTechEmail).limit(1)
   );
 
   if (!targets.length) {
@@ -92,7 +96,7 @@ async function sendDispatchNotification(jobId, job) {
   };
 
   try {
-    const response = await admin.messaging().sendEachForMulticast({ ...message, tokens: targets.map((t) => t.token) });
+    const response = await getMessaging().sendEachForMulticast({ ...message, tokens: targets.map((t) => t.token) });
     await pruneInvalidTokens(targets, response.responses);
     console.log('FCM dispatch notification sent to', response.successCount, 'device(s)');
   } catch (err) {
@@ -185,7 +189,7 @@ exports.notifyTechOnJobRescheduled = onDocumentUpdated('jobs/{jobId}', async (ev
     minute: '2-digit',
   });
   const targets = await getPushTargets(
-    admin.firestore().collection('users').where('email', '==', after.assignedTechEmail).limit(1)
+    getFirestore().collection('users').where('email', '==', after.assignedTechEmail).limit(1)
   );
   await sendJobPush(targets, event.params.jobId, {
     title: `Rescheduled: ${after.task || 'Job'}`,
@@ -225,15 +229,15 @@ async function pruneInvalidTokens(targets, responses) {
     if (response.success || !INVALID_TOKEN_CODES.has(response.error?.code)) return null;
     const { ref, token, field } = targets[index];
     const update = field === 'fcmTokens'
-      ? { fcmTokens: admin.firestore.FieldValue.arrayRemove(token) }
-      : { fcmToken: admin.firestore.FieldValue.delete() };
+      ? { fcmTokens: FieldValue.arrayRemove(token) }
+      : { fcmToken: FieldValue.delete() };
     return ref.update(update);
   }));
 }
 
 async function sendJobPush(targets, jobId, { title, body, tag }) {
   if (!targets.length) return;
-  const response = await admin.messaging().sendEachForMulticast({
+  const response = await getMessaging().sendEachForMulticast({
     tokens: targets.map((t) => t.token),
     notification: { title, body },
     data: { jobId: String(jobId) },
@@ -249,12 +253,12 @@ async function sendJobPush(targets, jobId, { title, body, tag }) {
 }
 
 async function notifyAdmins(jobId, alert) {
-  const targets = await getPushTargets(admin.firestore().collection('users').where('role', '==', 'admin'));
+  const targets = await getPushTargets(getFirestore().collection('users').where('role', '==', 'admin'));
   await sendJobPush(targets, jobId, alert);
 }
 
 async function refreshJobMediaCounts(jobId) {
-  const jobRef = admin.firestore().collection('jobs').doc(jobId);
+  const jobRef = getFirestore().collection('jobs').doc(jobId);
   const [jobSnap, photosSnap, filesSnap] = await Promise.all([
     jobRef.get(),
     jobRef.collection('photos').get(),
@@ -306,7 +310,7 @@ exports.notifyAdminsOnTechActivity = onDocumentUpdated('jobs/{jobId}', async (ev
 });
 
 async function jobAlertContext(jobId) {
-  const job = (await admin.firestore().collection('jobs').doc(jobId).get()).data() || {};
+  const job = (await getFirestore().collection('jobs').doc(jobId).get()).data() || {};
   return {
     who: job.assignedTechName || 'A technician',
     site: job.location || job.client || 'a job',
@@ -327,7 +331,7 @@ exports.syncPartStockOnConsumableWrite = onDocumentWritten('jobs/{jobId}/consuma
   const adjustments = partStockAdjustments(event.data?.before?.data(), event.data?.after?.data());
   const partIds = Object.keys(adjustments);
   if (!partIds.length) return null;
-  const db = admin.firestore();
+  const db = getFirestore();
   const markerRef = db.collection('stockEvents').doc(event.id);
   const changes = await db.runTransaction(async (tx) => {
     if ((await tx.get(markerRef)).exists) return [];
@@ -340,7 +344,7 @@ exports.syncPartStockOnConsumableWrite = onDocumentWritten('jobs/{jobId}/consuma
       const delta = adjustments[partId];
       const data = snap.data();
       const before = Number(data.onHand) || 0;
-      tx.update(partRefs[index], { onHand: admin.firestore.FieldValue.increment(delta) });
+      tx.update(partRefs[index], { onHand: FieldValue.increment(delta) });
       applied.push({ partId, name: data.name, delta, before, after: before + delta, reorderPoint: Number(data.reorderPoint) || 0 });
     });
     tx.set(markerRef, { createdAt: new Date() });
@@ -378,7 +382,7 @@ exports.notifyTechOnStaffStatusChange = onDocumentUpdated('jobs/{jobId}', async 
   if (!after.assignedTechEmail || !STAFF_ROLES.includes(after.statusUpdatedByRole)) return null;
 
   const targets = await getPushTargets(
-    admin.firestore().collection('users').where('email', '==', after.assignedTechEmail).limit(1)
+    getFirestore().collection('users').where('email', '==', after.assignedTechEmail).limit(1)
   );
   await sendJobPush(targets, event.params.jobId, {
     title: `Job update: ${after.status}`,
@@ -392,7 +396,7 @@ const ACTIVE_FIELD_STATUSES = ['En Route', 'On Site'];
 
 async function syncTechAvailability(email) {
   if (!email) return;
-  const db = admin.firestore();
+  const db = getFirestore();
   const techSnap = await db.collection('technicians').where('email', '==', email).limit(1).get();
   if (techSnap.empty) return;
   const jobsSnap = await db.collection('jobs')
@@ -458,7 +462,7 @@ exports.assignTechOnJobCreate = onDocumentCreated('jobs/{jobId}', async (event) 
   if (job.status !== 'Pending' || job.assignedTechEmail) return null;
   if (typeof job.lat !== 'number' || typeof job.lng !== 'number') return null;
 
-  const db = admin.firestore();
+  const db = getFirestore();
   const jobId = event.params.jobId;
   const [techsSnap, openSnap] = await Promise.all([
     db.collection('technicians').get(),
@@ -544,7 +548,7 @@ const REMINDER_STAGES = [
 ];
 
 async function getInvoiceBalance(jobId) {
-  const db = admin.firestore();
+  const db = getFirestore();
   const jobRef = db.collection('jobs').doc(jobId);
   const [billingSnap, consumablesSnap, paymentsSnap] = await Promise.all([
     db.collection('jobBilling').doc(jobId).get(),
@@ -572,14 +576,14 @@ exports.sendPaymentReminders = onSchedule(
     secrets: [emailjsServiceId, emailjsTemplateId, emailjsPublicKey, emailjsPrivateKey],
   },
   async () => {
-    const db = admin.firestore();
+    const db = getFirestore();
     const now = Date.now();
     const serviceId = emailjsServiceId.value().trim();
     const templateId = emailjsTemplateId.value().trim();
     const publicKey = emailjsPublicKey.value().trim();
     const privateKey = emailjsPrivateKey.value().trim();
 
-    const cutoff = admin.firestore.Timestamp.fromMillis(now - NET_TERMS_DAYS * DAY_MS);
+    const cutoff = Timestamp.fromMillis(now - NET_TERMS_DAYS * DAY_MS);
     const overdue = [];
     let lastDoc = null;
     for (;;) {
@@ -666,7 +670,7 @@ async function sendInvoiceEmail(jobId, job) {
   const privateKey = emailjsPrivateKey.value().trim();
 
   const [[pdfBytes], { balance }] = await Promise.all([
-    admin.storage().bucket().file(job.invoicePdfPath).download(),
+    getStorage().bucket().file(job.invoicePdfPath).download(),
     getInvoiceBalance(jobId),
   ]);
   const templateParams = {
@@ -678,7 +682,7 @@ async function sendInvoiceEmail(jobId, job) {
     invoice_filename: `SV-Smart-Dispatch-Invoice-${jobId}.pdf`,
   };
 
-  const billingRef = admin.firestore().collection('jobBilling').doc(jobId);
+  const billingRef = getFirestore().collection('jobBilling').doc(jobId);
   let sentWith = 'attachment';
   try {
     await sendEmailJs(serviceId, templateId, publicKey, privateKey, {
@@ -718,7 +722,7 @@ exports.resendInvoiceEmail = onCall(
     if (request.auth?.token?.role !== 'admin') throw new HttpsError('permission-denied', 'Only admins can resend invoices.');
     const jobId = request.data?.jobId;
     if (!jobId) throw new HttpsError('invalid-argument', 'Missing job.');
-    const snap = await admin.firestore().collection('jobs').doc(jobId).get();
+    const snap = await getFirestore().collection('jobs').doc(jobId).get();
     if (!snap.exists) throw new HttpsError('not-found', 'Job not found.');
     const job = snap.data();
     if (!job.adminSignedOff || !job.invoicePdfPath) throw new HttpsError('failed-precondition', 'Sign off the work before sending the invoice.');
@@ -737,13 +741,13 @@ exports.getInvoicePdf = onCall(async (request) => {
   const token = request.auth?.token;
   const jobId = request.data?.jobId;
   if (!jobId) throw new HttpsError('invalid-argument', 'Missing job.');
-  const snap = await admin.firestore().collection('jobs').doc(jobId).get();
+  const snap = await getFirestore().collection('jobs').doc(jobId).get();
   if (!snap.exists) throw new HttpsError('not-found', 'Job not found.');
   const job = snap.data();
   const isOwnerClient = token?.role === 'client' && token.email_verified === true && job.clientEmail === token.email;
   if (token?.role !== 'admin' && !isOwnerClient) throw new HttpsError('permission-denied', 'You cannot access this invoice.');
   if (!job.adminSignedOff || !job.invoicePdfPath) throw new HttpsError('failed-precondition', 'This invoice is not available yet.');
-  const [pdfBytes] = await admin.storage().bucket().file(job.invoicePdfPath).download();
+  const [pdfBytes] = await getStorage().bucket().file(job.invoicePdfPath).download();
   return { base64: pdfBytes.toString('base64') };
 });
 
@@ -753,10 +757,10 @@ exports.deleteStaffAccount = onCall(async (request) => {
   const uid = request.data?.uid;
   if (!uid || typeof uid !== 'string') throw new HttpsError('invalid-argument', 'Missing user.');
   if (uid === request.auth.uid) throw new HttpsError('failed-precondition', 'You cannot delete your own account.');
-  await admin.auth().deleteUser(uid).catch((err) => {
+  await getAuth().deleteUser(uid).catch((err) => {
     if (err.code !== 'auth/user-not-found') throw err;
   });
-  const db = admin.firestore();
+  const db = getFirestore();
   await Promise.all([
     db.collection('users').doc(uid).delete(),
     db.collection('technicians').doc(uid).delete(),
@@ -813,7 +817,7 @@ exports.acceptQuote = onCall(async (request) => {
   const quoteId = String(request.data?.quoteId || '').trim();
   if (!quoteId) throw new HttpsError('invalid-argument', 'Missing quote.');
 
-  const db = admin.firestore();
+  const db = getFirestore();
   const quoteRef = db.collection('quotes').doc(quoteId);
   const jobRef = db.collection('jobs').doc();
   const now = new Date();
@@ -865,7 +869,7 @@ exports.emailClientOnRescheduleDecision = onDocumentUpdated(
     const after = event.data.after.data();
     if (before.status !== 'Open' || after.status === 'Open' || !after.clientEmail) return;
 
-    const jobSnap = await admin.firestore().collection('jobs').doc(after.jobId).get();
+    const jobSnap = await getFirestore().collection('jobs').doc(after.jobId).get();
     const job = jobSnap.data() || {};
     const start = job.scheduledFor?.toDate ? job.scheduledFor.toDate() : null;
     const when = start
@@ -905,7 +909,7 @@ exports.createPaymentCheckout = onCall({ secrets: [stripeSecretKey] }, async (re
   }
   const jobId = String(request.data?.jobId || '').trim();
   if (!jobId) throw new HttpsError('invalid-argument', 'Missing job.');
-  const snap = await admin.firestore().collection('jobs').doc(jobId).get();
+  const snap = await getFirestore().collection('jobs').doc(jobId).get();
   if (!snap.exists) throw new HttpsError('not-found', 'Job not found.');
   const job = snap.data();
   if (job.clientEmail !== token.email) throw new HttpsError('permission-denied', 'This job is not yours.');
@@ -927,7 +931,7 @@ exports.createPaymentCheckout = onCall({ secrets: [stripeSecretKey] }, async (re
 async function recordCheckoutPayment(session) {
   const jobId = session.metadata?.jobId || session.client_reference_id;
   if (!jobId) return false;
-  const db = admin.firestore();
+  const db = getFirestore();
   const jobRef = db.collection('jobs').doc(jobId);
   const paymentRef = jobRef.collection('payments').doc(`stripe_${session.id}`);
   return db.runTransaction(async (tx) => {
@@ -936,7 +940,7 @@ async function recordCheckoutPayment(session) {
     if (existing.exists) return false;
     tx.set(paymentRef, {
       ...paymentFromCheckoutSession(session),
-      recordedAt: admin.firestore.FieldValue.serverTimestamp(),
+      recordedAt: FieldValue.serverTimestamp(),
       recordedBy: 'stripe',
       voided: false,
     });
@@ -976,7 +980,7 @@ exports.syncRoleClaim = onDocumentWritten('users/{uid}', async (event) => {
   const uid = event.params.uid;
   const role = event.data.after.exists ? event.data.after.data().role || null : null;
 
-  const user = await admin.auth().getUser(uid).catch((err) => {
+  const user = await getAuth().getUser(uid).catch((err) => {
     if (err.code === 'auth/user-not-found') return null;
     throw err;
   });
@@ -985,7 +989,7 @@ exports.syncRoleClaim = onDocumentWritten('users/{uid}', async (event) => {
   const claims = { ...(user.customClaims || {}) };
   if (role) claims.role = role;
   else delete claims.role;
-  await admin.auth().setCustomUserClaims(uid, claims);
+  await getAuth().setCustomUserClaims(uid, claims);
   return null;
 });
 
@@ -1011,15 +1015,15 @@ function auditDetails(data) {
 exports.auditJobWrites = onDocumentWritten('jobs/{jobId}', async (event) => {
   const before = event.data.before.exists ? event.data.before.data() : null;
   const after = event.data.after.exists ? event.data.after.data() : null;
-  const base = { entityType: 'job', jobId: event.params.jobId, createdAt: admin.firestore.FieldValue.serverTimestamp() };
+  const base = { entityType: 'job', jobId: event.params.jobId, createdAt: FieldValue.serverTimestamp() };
 
   if (!before && after) {
-    await admin.firestore().collection('auditLog').add({ ...base, action: 'created', actorEmail: after.updatedBy || null, details: auditDetails(after) });
+    await getFirestore().collection('auditLog').add({ ...base, action: 'created', actorEmail: after.updatedBy || null, details: auditDetails(after) });
     return null;
   }
   if (before && !after) {
     // Deletes are preceded by a client stamp of updatedBy, so the last editor is recorded
-    await admin.firestore().collection('auditLog').add({ ...base, action: 'deleted', actorEmail: before.updatedBy || null, details: auditDetails(before) });
+    await getFirestore().collection('auditLog').add({ ...base, action: 'deleted', actorEmail: before.updatedBy || null, details: auditDetails(before) });
     return null;
   }
 
@@ -1034,7 +1038,7 @@ exports.auditJobWrites = onDocumentWritten('jobs/{jobId}', async (event) => {
 
   // Client writes always bump updatedAt together with updatedBy; server writes leave both alone
   const clientWrite = auditValue(before.updatedAt) !== auditValue(after.updatedAt);
-  await admin.firestore().collection('auditLog').add({
+  await getFirestore().collection('auditLog').add({
     ...base,
     action: 'updated',
     actorEmail: clientWrite ? (after.updatedBy || null) : null,
@@ -1048,16 +1052,16 @@ exports.auditPaymentWrites = onDocumentWritten('jobs/{jobId}/payments/{paymentId
   const after = event.data.after.exists ? event.data.after.data() : null;
   if (!after) return null;
 
-  const base = { entityType: 'payment', jobId: event.params.jobId, paymentId: event.params.paymentId, createdAt: admin.firestore.FieldValue.serverTimestamp() };
+  const base = { entityType: 'payment', jobId: event.params.jobId, paymentId: event.params.paymentId, createdAt: FieldValue.serverTimestamp() };
   if (!before) {
-    await admin.firestore().collection('auditLog').add({
+    await getFirestore().collection('auditLog').add({
       ...base,
       action: 'recorded',
       actorEmail: after.recordedBy || null,
       details: { amount: after.amount, method: after.method, reference: after.reference || '' },
     });
   } else if (!before.voided && after.voided) {
-    await admin.firestore().collection('auditLog').add({
+    await getFirestore().collection('auditLog').add({
       ...base,
       action: 'voided',
       actorEmail: after.voidedBy || null,
@@ -1078,7 +1082,7 @@ exports.lookupAssetHistory = onCall(async (request) => {
     throw new HttpsError('invalid-argument', 'Enter a serial number.');
   }
 
-  const snapshot = await admin.firestore().collection('jobs').where('serialNumber', '==', serialNumber).get();
+  const snapshot = await getFirestore().collection('jobs').where('serialNumber', '==', serialNumber).get();
   const toIso = (value) => (value?.toDate ? value.toDate().toISOString() : null);
   const visits = snapshot.docs.map((doc) => {
     const job = doc.data();
@@ -1104,7 +1108,7 @@ exports.createJobFromWebsite = onRequest({ cors: ['https://www.siliconvalleysmar
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const db = admin.firestore();
+  const db = getFirestore();
   if (!(await websiteIntakeAllowed(db, req))) {
     return res.status(429).json({ error: 'Too many requests. Please try again later.' });
   }
