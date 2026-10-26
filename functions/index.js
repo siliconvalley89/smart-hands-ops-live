@@ -6,6 +6,8 @@ const admin = require('firebase-admin');
 const { partStockAdjustments, stockChangeAlerts } = require('./stock');
 const { reminderStageFor } = require('./reminders');
 const { quoteTotalCents, quoteAcceptProblem, buildQuoteJob } = require('./quote');
+const Stripe = require('stripe');
+const { checkoutProblem, checkoutSessionParams, paymentFromCheckoutSession } = require('./stripe');
 
 admin.initializeApp();
 
@@ -20,6 +22,9 @@ const emailjsTemplateId = defineSecret('EMAILJS_STATUS_TEMPLATE_ID');
 const emailjsPublicKey  = defineSecret('EMAILJS_PUBLIC_KEY');
 const emailjsPrivateKey = defineSecret('EMAILJS_PRIVATE_KEY');
 const emailjsInvoiceTemplateId = defineSecret('EMAILJS_INVOICE_TEMPLATE_ID');
+// Stripe: firebase functions:secrets:set STRIPE_SECRET_KEY / STRIPE_WEBHOOK_SECRET
+const stripeSecretKey = defineSecret('STRIPE_SECRET_KEY');
+const stripeWebhookSecret = defineSecret('STRIPE_WEBHOOK_SECRET');
 
 /**
  * Looks up the assigned tech's FCM token and sends a push notification
@@ -815,6 +820,134 @@ exports.acceptQuote = onCall(async (request) => {
   });
 
   return { jobId: jobRef.id };
+});
+
+// Staff hear when a client asks for a new time
+exports.notifyAdminsOnRescheduleRequest = onDocumentCreated('rescheduleRequests/{requestId}', async (event) => {
+  const request = event.data.data();
+  await notifyAdmins(request.jobId, {
+    title: 'Client asked to reschedule',
+    body: String(request.note || '').slice(0, 120) || 'Open the app for details',
+    tag: `reschedule-${event.params.requestId}`,
+  });
+  return null;
+});
+
+// Clients hear the outcome of their reschedule request by email
+exports.emailClientOnRescheduleDecision = onDocumentUpdated(
+  {
+    document: 'rescheduleRequests/{requestId}',
+    secrets: [emailjsServiceId, emailjsTemplateId, emailjsPublicKey, emailjsPrivateKey],
+  },
+  async (event) => {
+    const before = event.data.before.data();
+    const after = event.data.after.data();
+    if (before.status !== 'Open' || after.status === 'Open' || !after.clientEmail) return;
+
+    const jobSnap = await admin.firestore().collection('jobs').doc(after.jobId).get();
+    const job = jobSnap.data() || {};
+    const start = job.scheduledFor?.toDate ? job.scheduledFor.toDate() : null;
+    const when = start
+      ? start.toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: 'America/Los_Angeles' })
+      : '';
+    const approved = after.status === 'Approved';
+    try {
+      await sendEmailJs(
+        emailjsServiceId.value().trim(),
+        emailjsTemplateId.value().trim(),
+        emailjsPublicKey.value().trim(),
+        emailjsPrivateKey.value().trim(),
+        {
+          to_email:       after.clientEmail,
+          to_name:        job.client || 'Valued Customer',
+          job_status:     approved ? 'Rescheduled' : 'Reschedule declined',
+          job_task:       job.task || '',
+          job_location:   job.location || '',
+          tech_name:      job.assignedTechName || '',
+          status_message: approved
+            ? `Your reschedule request was approved. New time: ${when || 'to be confirmed'}.`
+            : 'Your reschedule request could not be approved. Please contact us to discuss other times.',
+          job_id:         after.jobId,
+        },
+      );
+    } catch (err) {
+      console.error(`Reschedule email failed for request ${event.params.requestId}:`, err.message);
+    }
+  },
+);
+
+// Clients pay the full open balance; Stripe Checkout collects the card and the webhook records it
+exports.createPaymentCheckout = onCall({ secrets: [stripeSecretKey] }, async (request) => {
+  const token = request.auth?.token;
+  if (token?.role !== 'client' || token.email_verified !== true) {
+    throw new HttpsError('permission-denied', 'Only verified clients can pay online.');
+  }
+  const jobId = String(request.data?.jobId || '').trim();
+  if (!jobId) throw new HttpsError('invalid-argument', 'Missing job.');
+  const snap = await admin.firestore().collection('jobs').doc(jobId).get();
+  if (!snap.exists) throw new HttpsError('not-found', 'Job not found.');
+  const job = snap.data();
+  if (job.clientEmail !== token.email) throw new HttpsError('permission-denied', 'This job is not yours.');
+
+  const { balance } = await getInvoiceBalance(jobId);
+  const balanceCents = Math.round(balance * 100);
+  const problem = checkoutProblem({ job, balanceCents });
+  if (problem) throw new HttpsError('failed-precondition', problem);
+
+  const stripe = new Stripe(stripeSecretKey.value());
+  const session = await stripe.checkout.sessions.create(
+    checkoutSessionParams({ jobId, job, amountCents: balanceCents }),
+    { idempotencyKey: `checkout-${jobId}-${balanceCents}-${Math.floor(Date.now() / (10 * 60 * 1000))}` },
+  );
+  return { url: session.url };
+});
+
+// Returns true only the first time a session is recorded, so Stripe retries never double-count
+async function recordCheckoutPayment(session) {
+  const jobId = session.metadata?.jobId || session.client_reference_id;
+  if (!jobId) return false;
+  const db = admin.firestore();
+  const jobRef = db.collection('jobs').doc(jobId);
+  const paymentRef = jobRef.collection('payments').doc(`stripe_${session.id}`);
+  return db.runTransaction(async (tx) => {
+    const [jobSnap, existing] = await Promise.all([tx.get(jobRef), tx.get(paymentRef)]);
+    if (!jobSnap.exists) throw new Error(`Paid job ${jobId} not found`);
+    if (existing.exists) return false;
+    tx.set(paymentRef, {
+      ...paymentFromCheckoutSession(session),
+      recordedAt: admin.firestore.FieldValue.serverTimestamp(),
+      recordedBy: 'stripe',
+      voided: false,
+    });
+    return true;
+  });
+}
+
+exports.stripeWebhook = onRequest({ secrets: [stripeSecretKey, stripeWebhookSecret] }, async (req, res) => {
+  if (req.method !== 'POST') {
+    res.status(405).end();
+    return;
+  }
+  const stripe = new Stripe(stripeSecretKey.value());
+  let event;
+  try {
+    event = stripe.webhooks.constructEvent(req.rawBody, req.get('stripe-signature'), stripeWebhookSecret.value());
+  } catch {
+    res.status(400).send('Invalid signature');
+    return;
+  }
+  if (event.type === 'checkout.session.completed' && event.data.object.payment_status === 'paid') {
+    const session = event.data.object;
+    if (await recordCheckoutPayment(session)) {
+      const { amount } = paymentFromCheckoutSession(session);
+      await notifyAdmins(session.metadata?.jobId || session.client_reference_id, {
+        title: 'Online payment received',
+        body: `$${amount.toFixed(2)} paid by card`,
+        tag: `payment-${session.id}`,
+      });
+    }
+  }
+  res.json({ received: true });
 });
 
 // Mirrors users/{uid}.role into the Auth token so security rules can read it without get() calls

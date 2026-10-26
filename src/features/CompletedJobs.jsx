@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Mail, Shield, Trash2 } from 'lucide-react';
 import TechNameWithPhoto from './TechNameWithPhoto';
 import CompletedJobPhotos from './CompletedJobPhotos';
+import PayBalanceButton from './PayBalanceButton';
 import { formatDate, getPhotoCount } from '../lib/jobDisplay';
 import { downloadInvoice } from '../lib/invoice';
 import { calcInvoiceTotal } from '../lib/invoiceTotals';
@@ -114,6 +115,7 @@ export default function CompletedJobs({
                               <span className="text-slate-400">Balance due</span>
                               <span className={`font-semibold ${receivable.balance > 0 ? 'text-amber-300' : 'text-teal-300'}`}>${receivable.balance.toFixed(2)} · {receivable.status}</span>
                             </div>
+                            <PayBalanceButton job={job} role={profile.role} balance={receivable.balance} />
                           </>
                         );
                       })()}

@@ -10,6 +10,8 @@ import { isFieldRole } from '../lib/roles';
 import { formatDate, getPhotoCount, getCheckoutBlockReason, getBreakReturnTime, getBreakStartBlock } from '../lib/jobDisplay';
 import TechNameWithPhoto from './TechNameWithPhoto';
 import JobMedia from './JobMedia';
+import PayBalanceButton from './PayBalanceButton';
+import RescheduleRequestForm from './RescheduleRequestForm';
 
 export default function ActiveJobs({
   profile,
@@ -430,6 +432,7 @@ export default function ActiveJobs({
                           </>
                         )}
                         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-end">
+                          <PayBalanceButton job={job} role={profile.role} balance={receivable.balance} />
                           {job.status !== 'Pending' && (
                             profile.role === 'admin' || job.adminSignedOff ? (
                               <button onClick={() => downloadInvoice(job, profile.role, setAppError)} className="rounded-2xl bg-teal-600 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-500 transition">
@@ -469,6 +472,10 @@ export default function ActiveJobs({
                     )}
                   </div>
                 </div>
+
+                {profile.role === 'client' && ['Pending', 'Assigned', 'Dispatched'].includes(job.status) && (
+                  <RescheduleRequestForm job={job} />
+                )}
 
                 <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <div className="space-y-2 text-slate-400 text-sm">

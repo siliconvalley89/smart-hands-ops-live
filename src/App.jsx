@@ -42,6 +42,7 @@ import CompletedJobs from './features/CompletedJobs';
 import RequestForm from './features/RequestForm';
 import Accounts from './features/Accounts';
 import TodayJobs from './features/TodayJobs';
+import RescheduleRequests from './features/RescheduleRequests';
 import { isFieldRole } from './lib/roles';
 import { BUSINESS_NAME, APP_DISPLAY_NAME } from './lib/branding';
 import {
@@ -1484,6 +1485,10 @@ function App() {
         {isAdmin && showStaffTab('money') && <ReportsPanel />}
         {isAdmin && showStaffTab('team') && <PartsInventory parts={parts} />}
         {canStaffManage && showStaffTab('quotes') && <QuotesPanel email={firebaseUser?.email || ''} isAdmin={isAdmin} />}
+
+        {canStaffManage && showStaffTab('jobs') && (
+          <RescheduleRequests activeJobs={activeJobs} jobs={jobs} askConfirm={askConfirm} setAppError={setAppError} />
+        )}
 
         {showStaffTab('jobs') && (
         <ActiveJobs

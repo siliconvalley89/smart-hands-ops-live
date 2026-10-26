@@ -611,6 +611,75 @@ describe('quotes', () => {
   });
 });
 
+describe('reschedule requests', () => {
+  const validRequest = (overrides = {}) => ({
+    jobId: 'job-open', clientEmail: CLIENT, note: 'Please move to Friday', status: 'Open',
+    createdAt: new Date(), createdBy: CLIENT, ...overrides,
+  });
+
+  const seedRequest = (id, overrides = {}) => testEnv.withSecurityRulesDisabled(async (context) => {
+    await setDoc(doc(context.firestore(), `rescheduleRequests/${id}`), validRequest(overrides));
+  });
+
+  it('owner client asks to reschedule a job that is not yet under way', async () => {
+    await assertSucceeds(setDoc(doc(as.client(), 'rescheduleRequests/r-new'), validRequest()));
+  });
+
+  it('client cannot request a change on a job that is on site, completed, or not theirs', async () => {
+    await assertFails(setDoc(doc(as.client(), 'rescheduleRequests/r-onsite'), validRequest({ jobId: 'job-onsite' })));
+    await assertFails(setDoc(doc(as.client(), 'rescheduleRequests/r-done'), validRequest({ jobId: 'job-done' })));
+    await assertFails(setDoc(doc(as.otherClient(), 'rescheduleRequests/r-other'), validRequest({ clientEmail: OTHER_CLIENT, createdBy: OTHER_CLIENT })));
+  });
+
+  it('rejects requests that are spoofed, empty, oversized, pre-resolved, or carry extra fields', async () => {
+    await assertFails(setDoc(doc(as.client(), 'rescheduleRequests/r-spoof'), validRequest({ createdBy: ADMIN })));
+    await assertFails(setDoc(doc(as.client(), 'rescheduleRequests/r-empty'), validRequest({ note: '' })));
+    await assertFails(setDoc(doc(as.client(), 'rescheduleRequests/r-long'), validRequest({ note: 'x'.repeat(501) })));
+    await assertFails(setDoc(doc(as.client(), 'rescheduleRequests/r-approved'), validRequest({ status: 'Approved' })));
+    await assertFails(setDoc(doc(as.client(), 'rescheduleRequests/r-extra'), validRequest({ resolution: 'done' })));
+  });
+
+  it('owner client reads own requests only', async () => {
+    await seedRequest('r-own');
+    await assertSucceeds(getDoc(doc(as.client(), 'rescheduleRequests/r-own')));
+    await assertFails(getDoc(doc(as.otherClient(), 'rescheduleRequests/r-own')));
+  });
+
+  it('staff read requests; techs and clients cannot read others', async () => {
+    await seedRequest('r-staff');
+    await assertSucceeds(getDoc(doc(as.admin(), 'rescheduleRequests/r-staff')));
+    await assertSucceeds(getDoc(doc(as.assistant(), 'rescheduleRequests/r-staff')));
+    await assertFails(getDoc(doc(as.tech(), 'rescheduleRequests/r-staff')));
+  });
+
+  it('staff resolve an open request once, attributed to themselves', async () => {
+    await seedRequest('r-approve');
+    await assertSucceeds(updateDoc(doc(as.assistant(), 'rescheduleRequests/r-approve'), {
+      status: 'Approved', resolvedAt: new Date(), resolvedBy: ASSISTANT,
+    }));
+    await seedRequest('r-decline');
+    await assertFails(updateDoc(doc(as.assistant(), 'rescheduleRequests/r-decline'), {
+      status: 'Declined', resolvedAt: new Date(), resolvedBy: ADMIN,
+    }));
+  });
+
+  it('a resolved request cannot be changed again, and the client cannot resolve or edit it', async () => {
+    await seedRequest('r-resolved', { status: 'Approved', resolvedBy: ASSISTANT, resolvedAt: new Date() });
+    await assertFails(updateDoc(doc(as.admin(), 'rescheduleRequests/r-resolved'), { status: 'Declined', resolvedBy: ADMIN }));
+    await seedRequest('r-client');
+    await assertFails(updateDoc(doc(as.client(), 'rescheduleRequests/r-client'), { status: 'Approved', resolvedBy: CLIENT }));
+    await assertFails(updateDoc(doc(as.assistant(), 'rescheduleRequests/r-client'), {
+      note: 'changed', status: 'Approved', resolvedBy: ASSISTANT,
+    }));
+  });
+
+  it('only admin deletes requests', async () => {
+    await seedRequest('r-delete');
+    await assertFails(deleteDoc(doc(as.assistant(), 'rescheduleRequests/r-delete')));
+    await assertSucceeds(deleteDoc(doc(as.admin(), 'rescheduleRequests/r-delete')));
+  });
+});
+
 describe('tech breaks', () => {
   const MIN = 60 * 1000;
   const HOUR = 60 * MIN;

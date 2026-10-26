@@ -367,6 +367,31 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    match /rescheduleRequests/{requestId} {
+      allow read: if isAdmin() || isAdminAssistant() || (
+        isVerifiedClient() && resource.data.clientEmail == request.auth.token.email
+      );
+      // Clients ask for a new time on their own job before the technician is dispatched
+      allow create: if isVerifiedClient() &&
+        request.resource.data.keys().hasOnly(['jobId', 'clientEmail', 'note', 'preferredFor', 'status', 'createdAt', 'createdBy']) &&
+        request.resource.data.keys().hasAll(['jobId', 'clientEmail', 'note', 'status', 'createdAt', 'createdBy']) &&
+        request.resource.data.clientEmail == request.auth.token.email &&
+        request.resource.data.createdBy == request.auth.token.email &&
+        request.resource.data.status == 'Open' &&
+        request.resource.data.note is string && request.resource.data.note.size() > 0 && request.resource.data.note.size() <= 500 &&
+        (!request.resource.data.keys().hasAny(['preferredFor']) || request.resource.data.preferredFor is timestamp) &&
+        request.resource.data.createdAt is timestamp &&
+        get(/databases/$(database)/documents/jobs/$(request.resource.data.jobId)).data.clientEmail == request.auth.token.email &&
+        get(/databases/$(database)/documents/jobs/$(request.resource.data.jobId)).data.status in ['Pending', 'Assigned', 'Dispatched'];
+      // Staff resolve an open request once; the client cannot change it
+      allow update: if (isAdmin() || isAdminAssistant()) &&
+        resource.data.status == 'Open' &&
+        request.resource.data.status in ['Approved', 'Declined'] &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'resolvedAt', 'resolvedBy']) &&
+        request.resource.data.resolvedBy == request.auth.token.email;
+      allow delete: if isAdmin();
+    }
+
     match /systemMetadata/{documentId} {
       allow read: if isAdmin();
       allow write: if false;
