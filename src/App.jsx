@@ -41,6 +41,7 @@ import ClientQuotes from './features/ClientQuotes';
 import CompletedJobs from './features/CompletedJobs';
 import RequestForm from './features/RequestForm';
 import Accounts from './features/Accounts';
+import TodayJobs from './features/TodayJobs';
 import { isFieldRole } from './lib/roles';
 import { BUSINESS_NAME, APP_DISPLAY_NAME } from './lib/branding';
 import {
@@ -161,6 +162,7 @@ function App() {
   const [sessionRestoreCount, setSessionRestoreCount] = useState(0);
   const [savedRoles, setSavedRoles] = useState({});
   const [requestFormOpen, setRequestFormOpen] = useState(false);
+  const [staffTab, setStaffTab] = useState('dispatch');
   const [editingJobId, setEditingJobId] = useState(null);
   const [jobEdits, setJobEdits] = useState({});
   const [verifyMessage, setVerifyMessage] = useState('');
@@ -1049,6 +1051,14 @@ function App() {
   const isAssistant = profile?.role === 'adminAssistant';
   const canStaffManage = isAdmin || isAssistant;
   const roleLabel = isAssistant ? 'Admin Assistant' : profile?.role;
+  const staffTabs = [
+    { key: 'dispatch', label: 'Dispatch' },
+    { key: 'jobs', label: 'Jobs' },
+    { key: 'quotes', label: 'Quotes' },
+    ...(isAdmin ? [{ key: 'money', label: 'Money' }] : []),
+    { key: 'team', label: 'Team & tools' },
+  ];
+  const showStaffTab = (tab) => !canStaffManage || staffTab === tab;
 
   const withPrivateData = (job) => {
     const billing = jobBilling[job.id] || {};
@@ -1362,6 +1372,8 @@ function App() {
           </div>
         </section>
 
+        {isFieldRole(profile.role) && <TodayJobs activeJobs={activeJobs} />}
+
         {profile.mustChangePassword === true && (
           <section className="rounded-3xl bg-slate-950/60 border border-slate-700 p-6 grid gap-6">
             <div>
@@ -1398,7 +1410,23 @@ function App() {
           </section>
         )}
 
-        {(canStaffManage || profile.role === 'client') && (
+        {canStaffManage && (
+          <nav className="flex flex-wrap gap-2" aria-label="Staff sections">
+            {staffTabs.map((tab) => (
+              <button
+                key={tab.key}
+                type="button"
+                onClick={() => setStaffTab(tab.key)}
+                aria-current={staffTab === tab.key ? 'page' : undefined}
+                className={`rounded-2xl px-4 py-2 text-sm font-semibold transition ${staffTab === tab.key ? 'bg-teal-600 text-white' : 'border border-slate-600 bg-slate-800 text-slate-300 hover:bg-slate-700'}`}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </nav>
+        )}
+
+        {(canStaffManage || profile.role === 'client') && showStaffTab('jobs') && (
           <RequestForm
             profile={profile}
             requestFormOpen={requestFormOpen}
@@ -1415,7 +1443,7 @@ function App() {
           <ClientQuotes clientEmail={firebaseUser.email} />
         )}
 
-        {canStaffManage && (
+        {canStaffManage && showStaffTab('team') && (
           <Accounts
             isAdmin={isAdmin}
             profile={profile}
@@ -1437,7 +1465,7 @@ function App() {
           />
         )}
 
-        {isAdmin && (
+        {isAdmin && showStaffTab('money') && (
           <ReceivablesSection
             showReceivablesPanel={showReceivablesPanel}
             setShowReceivablesPanel={setShowReceivablesPanel}
@@ -1446,17 +1474,18 @@ function App() {
           />
         )}
 
-        {canStaffManage && (
+        {canStaffManage && showStaffTab('dispatch') && (
           <SchedulingBoard activeJobs={activeJobs} techs={techs} onMoveJob={moveJobOnBoard} />
         )}
 
-        {canStaffManage && <AssetHistory />}
-        {isAdmin && <AuditLog />}
-        {isAdmin && <TimesheetExport />}
-        {isAdmin && <ReportsPanel />}
-        {isAdmin && <PartsInventory parts={parts} />}
-        {canStaffManage && <QuotesPanel email={firebaseUser?.email || ''} isAdmin={isAdmin} />}
+        {canStaffManage && showStaffTab('team') && <AssetHistory />}
+        {isAdmin && showStaffTab('team') && <AuditLog />}
+        {isAdmin && showStaffTab('money') && <TimesheetExport />}
+        {isAdmin && showStaffTab('money') && <ReportsPanel />}
+        {isAdmin && showStaffTab('team') && <PartsInventory parts={parts} />}
+        {canStaffManage && showStaffTab('quotes') && <QuotesPanel email={firebaseUser?.email || ''} isAdmin={isAdmin} />}
 
+        {showStaffTab('jobs') && (
         <ActiveJobs
           profile={profile}
           parts={parts}
@@ -1513,8 +1542,9 @@ function App() {
           adminSignOffWork={adminSignOffWork}
           handleDelete={handleDelete}
         />
+        )}
 
-        {!isAssistant && (
+        {!isAssistant && showStaffTab('jobs') && (
           <CompletedJobs
             profile={profile}
             loading={loading}
