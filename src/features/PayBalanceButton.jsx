@@ -18,6 +18,7 @@ export default function PayBalanceButton({ job, role, balance }) {
     } catch (err) {
       console.error('Online payment checkout failed', err);
       setError(err.message || 'Unable to start online payment.');
+    } finally {
       setBusy(false);
     }
   };
