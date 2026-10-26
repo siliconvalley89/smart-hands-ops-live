@@ -114,17 +114,20 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
+    match /maintenanceContracts/{contractId} {
+      allow read, delete: if isAdmin();
+      allow create, update: if isAdmin() &&
+        request.resource.data.frequency in ['weekly', 'monthly'] &&
+        request.resource.data.active is bool &&
+        request.resource.data.lat is number &&
+        request.resource.data.lng is number &&
+        request.resource.data.nextRunAt is timestamp;
+    }
+
     match /users/{userId} {
       allow read: if isSignedIn() && (request.auth.uid == userId || isAdmin());
-      allow create: if isSignedIn() && (
-        isAdmin() ||
-        (
-          request.auth.uid == userId &&
-          request.resource.data.uid == request.auth.uid &&
-          request.resource.data.email == request.auth.token.email &&
-          request.resource.data.role in ['tech', 'client']
-        )
-      );
+      // Accounts are created only by the createStaffAccount function (Admin SDK)
+      allow create: if false;
       // Admins can do full updates; users can update only their own push tokens, mustChangePassword and profile photo fields
       allow update: if isAdmin() ||
         (isSignedIn() && request.auth.uid == userId &&
@@ -134,12 +137,7 @@ service cloud.firestore {
 
     match /technicians/{techId} {
       allow read: if isSignedIn();
-      allow create: if isAdmin() || (
-        isTech() &&
-        request.auth.uid == techId &&
-        request.resource.data.uid == request.auth.uid &&
-        request.resource.data.email == request.auth.token.email
-      );
+      allow create: if isAdmin();
       allow update: if isAdmin() || (
         isTech() &&
         request.auth.uid == techId &&

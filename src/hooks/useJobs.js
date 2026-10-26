@@ -10,7 +10,7 @@ const scopedCompletedConstraints = (profile, firebaseUser) => {
   return [where('status', '==', 'Completed')];
 };
 
-export default function useJobs({ profile, firebaseUser, sessionRestoreCount, showCompletedJobsPanel, completedLimit, setAppError, suppressAuthStateRef }) {
+export default function useJobs({ profile, firebaseUser, showCompletedJobsPanel, completedLimit, setAppError }) {
   const [jobs, setJobs] = useState([]);
   const [jobBilling, setJobBilling] = useState({});
   const [jobPayments, setJobPayments] = useState({});
@@ -64,7 +64,7 @@ export default function useJobs({ profile, firebaseUser, sessionRestoreCount, sh
       unsubscribe();
       setLoading(true);
     };
-  }, [profile?.role, profile?.email, firebaseUser?.email, sessionRestoreCount]);
+  }, [profile?.role, profile?.email, firebaseUser?.email]);
 
   // Closed-jobs total via a cheap server-side count; refreshed whenever the open set changes size
   useEffect(() => {
@@ -98,7 +98,7 @@ export default function useJobs({ profile, firebaseUser, sessionRestoreCount, sh
       unsubscribe();
       setCompletedLoading(true);
     };
-  }, [profile, firebaseUser, showCompletedJobsPanel, completedLimit, sessionRestoreCount]);
+  }, [profile, firebaseUser, showCompletedJobsPanel, completedLimit]);
 
   const observedJobIds = [...new Set([...jobs, ...completedJobsData].map((job) => job.id))].sort();
   const observedJobIdsKey = observedJobIds.join('|');
@@ -124,7 +124,7 @@ export default function useJobs({ profile, firebaseUser, sessionRestoreCount, sh
             setJobConsumables((prev) => ({ ...prev, [jobId]: [] }));
             return;
           }
-          if (!suppressAuthStateRef.current) setAppError('Unable to load job consumables.');
+          setAppError('Unable to load job consumables.');
         },
       ));
 
@@ -139,7 +139,7 @@ export default function useJobs({ profile, firebaseUser, sessionRestoreCount, sh
           },
           (error) => {
             console.error(`Unable to load billing data for job ${jobId}`, error);
-            if (!suppressAuthStateRef.current) setAppError('Unable to load job billing data.');
+            setAppError('Unable to load job billing data.');
           },
         ));
 
@@ -164,7 +164,7 @@ export default function useJobs({ profile, firebaseUser, sessionRestoreCount, sh
       setJobPayments({});
       setJobConsumables({});
     };
-  }, [observedJobIdsKey, profile?.role, sessionRestoreCount, suppressAuthStateRef, setAppError]);
+  }, [observedJobIdsKey, profile?.role, setAppError]);
 
   const hasRole = Boolean(profile?.role);
   return {

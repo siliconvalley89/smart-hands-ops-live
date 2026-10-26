@@ -1,10 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, lazy, Suspense } from 'react';
 import { db, storage, auth, functions } from './firebase';
 import { httpsCallable } from 'firebase/functions';
-import { collection, addDoc, deleteDoc, doc, updateDoc, getDoc, setDoc, writeBatch } from 'firebase/firestore';
+import { collection, addDoc, deleteDoc, doc, updateDoc, setDoc, writeBatch } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import {
-  createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
   signOut as firebaseSignOut,
   sendEmailVerification,
@@ -20,7 +19,6 @@ import { geocodeAddress } from './lib/geocode';
 import { MAX_ATTACHMENT_BYTES, ATTACHMENT_ACCEPT, PHOTO_MAX_DIMENSION, PHOTO_JPEG_QUALITY, downloadPhotoFile, fileToSquareDataUrl, compressPhotoForUpload } from './lib/media';
 import { prepareBadge, generateBadgePdf } from './lib/badge';
 import { uploadInvoicePdf } from './lib/invoice';
-import ReceivablesSection from './features/ReceivablesSection';
 import useAuthProfile from './hooks/useAuthProfile';
 import useJobs from './hooks/useJobs';
 import useTechs from './hooks/useTechs';
@@ -33,16 +31,11 @@ import TechNameWithPhoto from './features/TechNameWithPhoto';
 import ActiveJobs from './features/ActiveJobs';
 import SchedulingBoard from './features/SchedulingBoard';
 import AssetHistory from './features/AssetHistory';
-import AuditLog from './features/AuditLog';
-import TimesheetExport from './features/TimesheetExport';
-import ReportsPanel from './features/ReportsPanel';
-import PartsInventory from './features/PartsInventory';
 import QuotesPanel from './features/QuotesPanel';
 import ClientQuotes from './features/ClientQuotes';
 import PaymentReturnBanner from './features/PaymentReturnBanner';
 import CompletedJobs from './features/CompletedJobs';
 import RequestForm from './features/RequestForm';
-import Accounts from './features/Accounts';
 import TodayJobs from './features/TodayJobs';
 import RescheduleRequests from './features/RescheduleRequests';
 import { isFieldRole } from './lib/roles';
@@ -63,6 +56,16 @@ import {
   Shield,
   Download,
 } from 'lucide-react';
+
+const ReceivablesSection = lazy(() => import('./features/ReceivablesSection'));
+const Accounts = lazy(() => import('./features/Accounts'));
+const AuditLog = lazy(() => import('./features/AuditLog'));
+const TimesheetExport = lazy(() => import('./features/TimesheetExport'));
+const ReportsPanel = lazy(() => import('./features/ReportsPanel'));
+const PartsInventory = lazy(() => import('./features/PartsInventory'));
+const DispatchMap = lazy(() => import('./features/DispatchMap'));
+const MaintenanceContracts = lazy(() => import('./features/MaintenanceContracts'));
+const LazyFallback = <p className="text-sm text-slate-400">Loading…</p>;
 
 
 
@@ -121,7 +124,7 @@ function App() {
   const [loginPassword, setLoginPassword] = useState('');
   const [loginError, setLoginError] = useState('');
   const [appError, setAppError] = useState('');
-  const { authReady, firebaseUser, setFirebaseUser, profile, setProfile, suppressAuthStateRef } = useAuthProfile(setAppError);
+  const { authReady, firebaseUser, setFirebaseUser, profile, setProfile } = useAuthProfile(setAppError);
   const [confirmDialog, setConfirmDialog] = useState(null);
   const askConfirm = (message, confirmLabel = 'Delete') => new Promise((resolve) => {
     setConfirmDialog({ message, confirmLabel, resolve });
@@ -138,7 +141,7 @@ function App() {
   const [newConsumable, setNewConsumable] = useState({ description: '', qty: 1, unitPrice: '', partId: '' });
   const [serviceFeeInputs, setServiceFeeInputs] = useState({});
   const [consumableEdits, setConsumableEdits] = useState({});
-  const [newAccount, setNewAccount] = useState({ name: '', email: '', password: '', role: 'tech', phone: '', location: '', adminPassword: '' });
+  const [newAccount, setNewAccount] = useState({ name: '', email: '', password: '', role: 'tech', phone: '', location: '' });
   const [accountMessage, setAccountMessage] = useState('');
   const [passwordForm, setPasswordForm] = useState({ current: '', next: '', confirm: '' });
   const [passwordMessage, setPasswordMessage] = useState('');
@@ -162,7 +165,7 @@ function App() {
   const [profilePhotoUploadBusy, setProfilePhotoUploadBusy] = useState(false);
   const [badgeViewUrl, setBadgeViewUrl] = useState(null);
   const [geoEventBusyJobId, setGeoEventBusyJobId] = useState(null);
-  const [sessionRestoreCount, setSessionRestoreCount] = useState(0);
+
   const [savedRoles, setSavedRoles] = useState({});
   const [requestFormOpen, setRequestFormOpen] = useState(false);
   const [staffTab, setStaffTab] = useState('dispatch');
@@ -170,7 +173,7 @@ function App() {
   const [jobEdits, setJobEdits] = useState({});
   const [verifyMessage, setVerifyMessage] = useState('');
 
-  const { jobs, loading, jobBilling, jobPayments, jobConsumables, completedJobsData, completedLoading, completedTotal } = useJobs({ profile, firebaseUser, sessionRestoreCount, showCompletedJobsPanel, completedLimit, setAppError, suppressAuthStateRef });
+  const { jobs, loading, jobBilling, jobPayments, jobConsumables, completedJobsData, completedLoading, completedTotal } = useJobs({ profile, firebaseUser, showCompletedJobsPanel, completedLimit, setAppError });
   const COMPLETED_PAGE_SIZE = 25;
 
   const techs = useTechs(firebaseUser);
@@ -313,19 +316,16 @@ function App() {
 
   const createAccount = async () => {
     setAccountMessage('');
-    if (!newAccount.name || !newAccount.email || !newAccount.password || !newAccount.role || !newAccount.adminPassword) {
-      setAccountMessage('Please fill all required account fields, including your own password.');
+    if (!newAccount.name || !newAccount.email || !newAccount.password || !newAccount.role) {
+      setAccountMessage('Please fill all required account fields.');
       return;
     }
     if (newAccount.role === 'tech' && !newAccount.location) {
       setAccountMessage('Please enter a base location for technician accounts.');
       return;
     }
-    const adminEmail = profile?.email;
-    const adminPassword = newAccount.adminPassword;
-    const adminUid = firebaseUser?.uid;
 
-    // Locate the base address first so a failed lookup can't leave a half-created technician
+    // Locate the base address first so a failed lookup can't create a technician without coordinates
     let techGeo = null;
     if (newAccount.role === 'tech') {
       try {
@@ -337,64 +337,25 @@ function App() {
       }
     }
 
-    suppressAuthStateRef.current = true;
     try {
-      const result = await createUserWithEmailAndPassword(auth, newAccount.email.trim(), newAccount.password.trim());
-      const user = result.user;
-      await setDoc(doc(db, 'users', user.uid), {
-        uid: user.uid,
-        displayName: newAccount.name,
+      await httpsCallable(functions, 'createStaffAccount')({
         email: newAccount.email.trim(),
+        password: newAccount.password.trim(),
+        name: newAccount.name.trim(),
         role: newAccount.role,
-        mustChangePassword: true,
-      });
-      if (newAccount.role === 'client' || newAccount.role === 'tech') {
-        await sendEmailVerification(user).catch((err) => console.warn('Verification email failed', err.message));
-      }
-
-      if (newAccount.role === 'tech') {
-        await setDoc(doc(db, 'technicians', user.uid), {
-          uid: user.uid,
-          name: newAccount.name,
-          email: newAccount.email.trim(),
-          phone: newAccount.phone || '',
+        phone: newAccount.phone || '',
+        ...(techGeo && {
           location: techGeo.displayName,
           rawLocation: newAccount.location,
           lat: techGeo.lat,
           lng: techGeo.lng,
-          status: 'available',
-          createdAt: new Date(),
-        });
-      }
-
-      await firebaseSignOut(auth);
-      await signInWithEmailAndPassword(auth, adminEmail, adminPassword);
-      // Manually restore admin state — avoids UI flicker from onAuthStateChanged
-      const adminDocSnap = await getDoc(doc(db, 'users', adminUid));
-      setFirebaseUser(auth.currentUser);
-      if (adminDocSnap.exists()) setProfile({ id: adminDocSnap.id, ...adminDocSnap.data() });
-      setAppError('');
-      setSessionRestoreCount((count) => count + 1);
+        }),
+      });
       setAccountMessage(`${newAccount.role === 'tech' ? 'Technician' : 'Client'} account created successfully.`);
-      setNewAccount({ name: '', email: '', password: '', role: 'tech', phone: '', location: '', adminPassword: '' });
+      setNewAccount({ name: '', email: '', password: '', role: 'tech', phone: '', location: '' });
     } catch (error) {
       console.error('Create account failed', error);
-      try {
-        await firebaseSignOut(auth);
-        if (adminEmail && adminPassword) {
-          await signInWithEmailAndPassword(auth, adminEmail, adminPassword);
-          const adminDocSnap = await getDoc(doc(db, 'users', adminUid));
-          setFirebaseUser(auth.currentUser);
-          if (adminDocSnap.exists()) setProfile({ id: adminDocSnap.id, ...adminDocSnap.data() });
-          setAppError('');
-          setSessionRestoreCount((count) => count + 1);
-        }
-      } catch (recoveryError) {
-        console.error('Admin session recovery failed', recoveryError);
-      }
       setAccountMessage(error.message || 'Unable to create account.');
-    } finally {
-      suppressAuthStateRef.current = false;
     }
   };
 
@@ -1035,9 +996,10 @@ function App() {
   const roleLabel = isAssistant ? 'Admin Assistant' : profile?.role;
   const staffTabs = [
     { key: 'dispatch', label: 'Dispatch' },
+    { key: 'map', label: 'Map' },
     { key: 'jobs', label: 'Jobs' },
     { key: 'quotes', label: 'Quotes' },
-    ...(isAdmin ? [{ key: 'money', label: 'Money' }] : []),
+    ...(isAdmin ? [{ key: 'contracts', label: 'Contracts' }, { key: 'money', label: 'Money' }] : []),
     { key: 'team', label: 'Team & tools' },
   ];
   const showStaffTab = (tab) => !canStaffManage || staffTab === tab;
@@ -1428,45 +1390,61 @@ function App() {
         )}
 
         {canStaffManage && showStaffTab('team') && (
-          <Accounts
-            isAdmin={isAdmin}
-            profile={profile}
-            users={users}
-            newAccount={newAccount}
-            setNewAccount={setNewAccount}
-            accountMessage={accountMessage}
-            createAccount={createAccount}
-            showAddUserPanel={showAddUserPanel}
-            setShowAddUserPanel={setShowAddUserPanel}
-            showUsersPanel={showUsersPanel}
-            setShowUsersPanel={setShowUsersPanel}
-            userRoleEdits={userRoleEdits}
-            setUserRoleEdits={setUserRoleEdits}
-            savedRoles={savedRoles}
-            setSavedRoles={setSavedRoles}
-            updateUserRole={updateUserRole}
-            deleteUser={deleteUser}
-          />
+          <Suspense fallback={LazyFallback}>
+            <Accounts
+              isAdmin={isAdmin}
+              profile={profile}
+              users={users}
+              newAccount={newAccount}
+              setNewAccount={setNewAccount}
+              accountMessage={accountMessage}
+              createAccount={createAccount}
+              showAddUserPanel={showAddUserPanel}
+              setShowAddUserPanel={setShowAddUserPanel}
+              showUsersPanel={showUsersPanel}
+              setShowUsersPanel={setShowUsersPanel}
+              userRoleEdits={userRoleEdits}
+              setUserRoleEdits={setUserRoleEdits}
+              savedRoles={savedRoles}
+              setSavedRoles={setSavedRoles}
+              updateUserRole={updateUserRole}
+              deleteUser={deleteUser}
+            />
+          </Suspense>
         )}
 
         {isAdmin && showStaffTab('money') && (
-          <ReceivablesSection
-            showReceivablesPanel={showReceivablesPanel}
-            setShowReceivablesPanel={setShowReceivablesPanel}
-            recordedBy={firebaseUser?.email || ''}
-            setAppError={setAppError}
-          />
+          <Suspense fallback={LazyFallback}>
+            <ReceivablesSection
+              showReceivablesPanel={showReceivablesPanel}
+              setShowReceivablesPanel={setShowReceivablesPanel}
+              recordedBy={firebaseUser?.email || ''}
+              setAppError={setAppError}
+            />
+          </Suspense>
         )}
 
         {canStaffManage && showStaffTab('dispatch') && (
           <SchedulingBoard activeJobs={activeJobs} techs={techs} onMoveJob={moveJobOnBoard} />
         )}
 
+        {canStaffManage && showStaffTab('map') && (
+          <Suspense fallback={LazyFallback}>
+            <DispatchMap jobs={activeJobs} />
+          </Suspense>
+        )}
+
+        {isAdmin && showStaffTab('contracts') && (
+          <Suspense fallback={LazyFallback}>
+            <MaintenanceContracts recordedBy={firebaseUser?.email || ''} />
+          </Suspense>
+        )}
+
         {canStaffManage && showStaffTab('team') && <AssetHistory />}
-        {isAdmin && showStaffTab('team') && <AuditLog />}
-        {isAdmin && showStaffTab('money') && <TimesheetExport />}
-        {isAdmin && showStaffTab('money') && <ReportsPanel />}
-        {isAdmin && showStaffTab('team') && <PartsInventory parts={parts} />}
+        {isAdmin && showStaffTab('team') && <Suspense fallback={LazyFallback}><AuditLog /></Suspense>}
+        {isAdmin && showStaffTab('money') && <Suspense fallback={LazyFallback}><TimesheetExport /></Suspense>}
+        {isAdmin && showStaffTab('money') && <Suspense fallback={LazyFallback}><ReportsPanel /></Suspense>}
+        {isAdmin && showStaffTab('team') && <Suspense fallback={LazyFallback}><PartsInventory parts={parts} /></Suspense>}
         {canStaffManage && showStaffTab('quotes') && <QuotesPanel email={firebaseUser?.email || ''} isAdmin={isAdmin} />}
 
         {canStaffManage && showStaffTab('jobs') && (

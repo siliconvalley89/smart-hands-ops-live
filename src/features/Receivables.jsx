@@ -1,8 +1,6 @@
-import { useEffect, useState } from 'react';
-import { collection, collectionGroup, onSnapshot, or, query, where } from 'firebase/firestore';
-import { db } from '../firebase';
+import { useState } from 'react';
 import { downloadCsv } from '../lib/csv';
-import { AGING_BUCKETS, PAYMENT_METHODS, getAgingBucket, getReceivableStatus, recordPayment, voidPayment } from '../lib/payments';
+import { PAYMENT_METHODS, recordPayment, voidPayment } from '../lib/payments';
 
 const money = (value) => `$${Number(value || 0).toFixed(2)}`;
 const toDate = (value) => (value?.toDate ? value.toDate() : value ? new Date(value) : null);
@@ -21,74 +19,16 @@ const STATUS_STYLES = {
   Unpaid: 'text-slate-300',
 };
 
-const groupByJob = (snapshot) => snapshot.docs.reduce((groups, item) => {
-  const jobId = item.ref.parent.parent.id;
-  if (!groups[jobId]) groups[jobId] = [];
-  groups[jobId].push({ ...item.data(), id: item.id });
-  return groups;
-}, {});
-
-export default function Receivables({ recordedBy, setAppError }) {
-  const [invoicedJobs, setInvoicedJobs] = useState([]);
-  const [billingByJob, setBillingByJob] = useState({});
-  const [consumablesByJob, setConsumablesByJob] = useState({});
-  const [paymentsByJob, setPaymentsByJob] = useState({});
+export default function Receivables({ rows, recordedBy }) {
   const [showPaid, setShowPaid] = useState(false);
   const [openJobId, setOpenJobId] = useState(null);
   const [form, setForm] = useState(EMPTY_FORM);
   const [formError, setFormError] = useState('');
   const [saving, setSaving] = useState(false);
   const [voidTarget, setVoidTarget] = useState(null);
-  const [nowMs, setNowMs] = useState(() => Date.now());
 
-  useEffect(() => {
-    const timer = setInterval(() => setNowMs(Date.now()), 60_000);
-    return () => clearInterval(timer);
-  }, []);
-
-  useEffect(() => {
-    const onError = (label) => (error) => {
-      console.error(`Receivables ${label} listener failed`, error);
-      setAppError('Unable to load receivables data.');
-    };
-    const unsubscribes = [
-      onSnapshot(
-        query(collection(db, 'jobs'), or(where('status', '==', 'Completed'), where('invoiceSent', '==', true))),
-        (snapshot) => setInvoicedJobs(snapshot.docs.map((item) => ({ id: item.id, ...item.data() }))),
-        onError('jobs'),
-      ),
-      onSnapshot(
-        collection(db, 'jobBilling'),
-        (snapshot) => setBillingByJob(Object.fromEntries(snapshot.docs.map((item) => [item.id, item.data()]))),
-        onError('billing'),
-      ),
-      onSnapshot(collectionGroup(db, 'consumables'), (snapshot) => setConsumablesByJob(groupByJob(snapshot)), onError('consumables')),
-      onSnapshot(collectionGroup(db, 'payments'), (snapshot) => setPaymentsByJob(groupByJob(snapshot)), onError('payments')),
-    ];
-    return () => unsubscribes.forEach((unsubscribe) => unsubscribe());
-  }, [setAppError]);
-
-  const rows = invoicedJobs.map((job) => {
-    const billing = billingByJob[job.id] || {};
-    const consumables = (consumablesByJob[job.id] || []).map((item) => ({
-      ...item,
-      unitPrice: billing.consumablePrices?.[item.id] ?? 0,
-    }));
-    const merged = { ...job, ...billing, consumables };
-    const payments = paymentsByJob[job.id] || [];
-    return { job: merged, payments, receivable: getReceivableStatus(merged, payments, nowMs) };
-  });
-
-  const openRows = rows.filter((row) => row.receivable.balance > 0);
-  const visibleRows = (showPaid ? rows : openRows)
+  const visibleRows = [...(showPaid ? rows : rows.filter((row) => row.receivable.balance > 0))]
     .sort((a, b) => b.receivable.daysOverdue - a.receivable.daysOverdue || b.receivable.balance - a.receivable.balance);
-  const outstanding = openRows.reduce((sum, row) => sum + row.receivable.balance, 0);
-  const overdueRows = openRows.filter((row) => row.receivable.daysOverdue > 0);
-  const overdueTotal = overdueRows.reduce((sum, row) => sum + row.receivable.balance, 0);
-  const buckets = AGING_BUCKETS.map((bucket) => {
-    const inBucket = openRows.filter((row) => getAgingBucket(row.receivable.daysOverdue) === bucket.value);
-    return { ...bucket, count: inBucket.length, total: inBucket.reduce((sum, row) => sum + row.receivable.balance, 0) };
-  });
 
   const toggleRow = (row) => {
     if (openJobId === row.job.id) {
@@ -172,28 +112,6 @@ export default function Receivables({ recordedBy, setAppError }) {
 
   return (
     <div className="grid gap-6">
-      <div className="grid gap-3 sm:grid-cols-3">
-        <div className="rounded-2xl bg-slate-900 border border-slate-700 p-4">
-          <div className="text-slate-400 text-sm">Outstanding</div>
-          <div className="text-2xl font-semibold text-slate-100">{money(outstanding)}</div>
-          <div className="text-slate-500 text-sm">{openRows.length} open invoice(s)</div>
-        </div>
-        <div className="rounded-2xl bg-slate-900 border border-slate-700 p-4">
-          <div className="text-slate-400 text-sm">Overdue</div>
-          <div className="text-2xl font-semibold text-rose-300">{money(overdueTotal)}</div>
-          <div className="text-slate-500 text-sm">{overdueRows.length} overdue invoice(s)</div>
-        </div>
-        <div className="rounded-2xl bg-slate-900 border border-slate-700 p-4 grid grid-cols-2 gap-2">
-          {buckets.map((bucket) => (
-            <div key={bucket.value}>
-              <div className="text-slate-400 text-xs">{bucket.label}</div>
-              <div className="text-slate-100 font-semibold">{money(bucket.total)}</div>
-              <div className="text-slate-500 text-xs">{bucket.count} invoice(s)</div>
-            </div>
-          ))}
-        </div>
-      </div>
-
       <div className="flex flex-wrap items-center justify-between gap-3">
         <label className="flex items-center gap-2 text-slate-300 text-sm">
           <input type="checkbox" checked={showPaid} onChange={(e) => setShowPaid(e.target.checked)} />

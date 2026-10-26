@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../src/firebase', () => ({ db: {}, storage: {}, auth: {} }));
 
-const { getAgingBucket, getInvoiceDueMillis, getReceivableStatus } = await import('../../src/lib/payments');
+const { getInvoiceDueMillis, getReceivableStatus } = await import('../../src/lib/payments');
 
 const DAY = 24 * 60 * 60 * 1000;
 const NOW = new Date(2026, 9, 25, 12).getTime();
@@ -61,19 +61,5 @@ describe('getInvoiceDueMillis', () => {
 
   it('is null without a sign-off', () => {
     expect(getInvoiceDueMillis({})).toBeNull();
-  });
-});
-
-describe('getAgingBucket', () => {
-  it.each([
-    [-3, 'current'],
-    [0, 'current'],
-    [1, '1-30'],
-    [30, '1-30'],
-    [31, '31-60'],
-    [60, '31-60'],
-    [61, '61+'],
-  ])('%i days overdue is %s', (days, bucket) => {
-    expect(getAgingBucket(days)).toBe(bucket);
   });
 });

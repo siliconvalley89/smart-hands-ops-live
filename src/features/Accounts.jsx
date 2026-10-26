@@ -91,18 +91,6 @@ export default function Accounts({
           />
         </div>
       )}
-      <div className="grid gap-4 md:grid-cols-2">
-        <input
-          type="password"
-          value={newAccount.adminPassword}
-          onChange={(e) => setNewAccount((prev) => ({ ...prev, adminPassword: e.target.value }))}
-          placeholder="Your own password"
-          className="w-full rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3 text-slate-100"
-        />
-        <div className="rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3 text-slate-400 flex items-center">
-          This is required to restore your session after creating the new account.
-        </div>
-      </div>
 
       {accountMessage && <div className="rounded-2xl bg-violet-900/50 p-3 text-violet-200">{accountMessage}</div>}
       <button onClick={createAccount} type="button" className="rounded-2xl bg-indigo-600 px-5 py-3 text-white font-semibold hover:bg-indigo-500 transition flex items-center justify-center gap-2">

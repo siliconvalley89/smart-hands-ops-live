@@ -6,6 +6,7 @@ import { formatSchedule, getJobStatusLabel } from '../lib/jobTime';
 import { downloadInvoice } from '../lib/invoice';
 import { calcInvoiceTotal } from '../lib/invoiceTotals';
 import { getReceivableStatus } from '../lib/payments';
+import { formatSlaLabel, getResponseSla } from '../lib/sla';
 import { isFieldRole } from '../lib/roles';
 import { formatDate, getPhotoCount, getCheckoutBlockReason, getBreakReturnTime, getBreakStartBlock, isOnBreak } from '../lib/jobDisplay';
 import TechNameWithPhoto from './TechNameWithPhoto';
@@ -131,6 +132,7 @@ export default function ActiveJobs({
             const beforeReady = getPhotoCount(job, 'before') > 0;
             const afterReady = getPhotoCount(job, 'after') > 0;
             const canRequestSignoff = isFieldRole(profile.role) && ['Assigned', 'Dispatched', 'En Route', 'On Site'].includes(job.status) && beforeReady && afterReady && Boolean(job.checkInAt);
+            const sla = profile.role !== 'client' ? getResponseSla(job, now) : null;
             const onBreak = isOnBreak(job);
             const canClientSignoff = profile.role === 'client' && job.status === 'Ready for Signoff' && !job.clientSignedOff;
 
@@ -148,6 +150,7 @@ export default function ActiveJobs({
                   <span className={`inline-flex rounded-full px-3 py-1 text-xs uppercase tracking-[0.2em] ${job.status === 'Ready for Signoff' ? 'bg-orange-500/10 text-orange-300' : 'bg-teal-500/10 text-teal-300'}`}>
                     {getJobStatusLabel(job)}
                   </span>
+                  {sla && <span className={`inline-flex rounded-full px-3 py-1 text-xs ${sla.breached ? 'bg-rose-500/10 text-rose-300' : 'bg-amber-500/10 text-amber-300'}`}>{formatSlaLabel(sla)}</span>}
                   <span className="font-semibold text-white">{job.client}</span>
                   <span className="text-slate-300 text-sm truncate max-w-xs">{job.task}</span>
                   <span className="text-slate-400 text-sm">{job.assignedTechName || 'Unassigned'}</span>
@@ -166,6 +169,7 @@ export default function ActiveJobs({
                       <span className={`inline-flex rounded-full px-3 py-1 ${job.status === 'Completed' ? 'bg-emerald-500/10 text-emerald-300' : job.status === 'Ready for Signoff' ? 'bg-orange-500/10 text-orange-300' : 'bg-teal-500/10 text-teal-300'}`}>
                         {getJobStatusLabel(job)}
                       </span>
+                      {sla && <span className={`inline-flex rounded-full px-3 py-1 text-xs ${sla.breached ? 'bg-rose-500/10 text-rose-300' : 'bg-amber-500/10 text-amber-300'}`}>{formatSlaLabel(sla)}</span>}
                       {profile.role === 'admin' && (
                         <button
                           type="button"

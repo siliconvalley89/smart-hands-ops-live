@@ -533,14 +533,44 @@ describe('users', () => {
     await assertFails(updateDoc(doc(as.tech(), 'users/admin-uid'), { fcmTokens: ['tok-1'] }));
   });
 
-  it('self-create allows tech or client, never admin', async () => {
+  it('no client-side account creation: self-signup and admin writes are denied', async () => {
     const signedUp = () => testEnv.authenticatedContext('new-uid', { email: 'new@test.dev', email_verified: true }).firestore();
-    await assertSucceeds(setDoc(doc(signedUp(), 'users/new-uid'), { uid: 'new-uid', email: 'new@test.dev', role: 'tech' }));
-    await assertFails(setDoc(doc(signedUp(), 'users/new-uid'), { uid: 'new-uid', email: 'new@test.dev', role: 'admin' }));
+    await assertFails(setDoc(doc(signedUp(), 'users/new-uid'), { uid: 'new-uid', email: 'new@test.dev', role: 'tech' }));
+    await assertFails(setDoc(doc(as.admin(), 'users/new-uid'), { uid: 'new-uid', email: 'new@test.dev', role: 'tech' }));
+  });
+});
+
+describe('maintenance contracts', () => {
+  const contract = (overrides = {}) => ({
+    client: 'Acme', clientEmail: CLIENT, task: 'Quarterly patch', location: '1 Main St', rawLocation: '1 Main St',
+    lat: 37.3, lng: -121.9, frequency: 'weekly', active: true, nextRunAt: new Date(), ...overrides,
+  });
+
+  it('admin creates a valid contract', async () => {
+    await assertSucceeds(setDoc(doc(as.admin(), 'maintenanceContracts/c1'), contract()));
+  });
+
+  it('rejects contracts with an unknown frequency, missing coordinates, or no schedule', async () => {
+    await assertFails(setDoc(doc(as.admin(), 'maintenanceContracts/c2'), contract({ frequency: 'daily' })));
+    const { lat: _lat, ...noLat } = contract();
+    await assertFails(setDoc(doc(as.admin(), 'maintenanceContracts/c3'), noLat));
+    await assertFails(setDoc(doc(as.admin(), 'maintenanceContracts/c4'), contract({ nextRunAt: 'soon' })));
+  });
+
+  it('only admins read or write contracts', async () => {
+    await assertSucceeds(setDoc(doc(as.admin(), 'maintenanceContracts/c5'), contract()));
+    await assertFails(getDoc(doc(as.assistant(), 'maintenanceContracts/c5')));
+    await assertFails(getDoc(doc(as.client(), 'maintenanceContracts/c5')));
+    await assertFails(setDoc(doc(as.tech(), 'maintenanceContracts/c6'), contract()));
+    await assertFails(setDoc(doc(as.assistant(), 'maintenanceContracts/c7'), contract()));
   });
 });
 
 describe('technicians and badges', () => {
+  it('no client-side technician creation, even for the technician themself', async () => {
+    await assertFails(setDoc(doc(as.tech(), 'technicians/new-tech'), { uid: 'new-tech', email: TECH, name: 'New' }));
+  });
+
   it('tech updates own profile photo only', async () => {
     await assertSucceeds(updateDoc(doc(as.tech(), 'technicians/tech-uid'), { profilePhotoUrl: 'https://x/y.jpg' }));
     await assertFails(updateDoc(doc(as.tech(), 'technicians/tech-uid'), { name: 'Hacked' }));

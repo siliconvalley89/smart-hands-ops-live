@@ -27,8 +27,12 @@ function getJobWindowMs(job, now) {
   return null;
 }
 
+function getTargetWindowMs(job, now) {
+  return getJobWindowMs(job, now) || { start: now, end: now + JOB_WINDOW_MS };
+}
+
 function hasTechConflict(target, techEmail, openJobs, now) {
-  const targetWindow = getJobWindowMs(target, now) || { start: now, end: now + JOB_WINDOW_MS };
+  const targetWindow = getTargetWindowMs(target, now);
   return openJobs.some((other) => {
     if (other.id === target.id || other.assignedTechEmail !== techEmail) return false;
     const otherWindow = getJobWindowMs(other, now);
@@ -43,4 +47,4 @@ function needsConflictCheck(before, after) {
   return scheduleChanged && Boolean(after.assignedTechEmail) && MOVABLE_STATUSES.includes(after.status);
 }
 
-module.exports = { REVERT_FIELDS, hasTechConflict, needsConflictCheck, toMillisValue };
+module.exports = { REVERT_FIELDS, getTargetWindowMs, hasTechConflict, needsConflictCheck, toMillisValue };

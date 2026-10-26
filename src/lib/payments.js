@@ -12,13 +12,6 @@ export const PAYMENT_METHODS = [
   { value: 'other', label: 'Other' },
 ];
 
-export const AGING_BUCKETS = [
-  { value: 'current', label: 'Current' },
-  { value: '1-30', label: '1–30 days' },
-  { value: '31-60', label: '31–60 days' },
-  { value: '61+', label: '61+ days' },
-];
-
 const DAY_MS = 24 * 60 * 60 * 1000;
 const toCents = (amount) => Math.round(Number(amount || 0) * 100);
 
@@ -49,13 +42,6 @@ export const getReceivableStatus = (job, payments = [], nowMs = Date.now()) => {
     daysOverdue,
     status,
   };
-};
-
-export const getAgingBucket = (daysOverdue) => {
-  if (daysOverdue <= 0) return 'current';
-  if (daysOverdue <= 30) return '1-30';
-  if (daysOverdue <= 60) return '31-60';
-  return '61+';
 };
 
 export const recordPayment = (jobId, { amount, method, reference, receivedAt, recordedBy }) => {

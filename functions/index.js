@@ -14,7 +14,9 @@ const { quoteTotalCents, quoteAcceptProblem, buildQuoteJob } = require('./quote'
 const Stripe = require('stripe');
 const { checkoutAction, checkoutProblem, checkoutSessionParams, paymentFromCheckoutSession } = require('./stripe');
 const { validateWebsiteIntake } = require('./websiteIntake');
-const { REVERT_FIELDS, hasTechConflict, needsConflictCheck, toMillisValue } = require('./schedule');
+const { REVERT_FIELDS, getTargetWindowMs, hasTechConflict, needsConflictCheck, toMillisValue } = require('./schedule');
+const { parseStaffAccount } = require('./accounts');
+const { FREQUENCIES, advanceOccurrence, dueOccurrences } = require('./contracts');
 
 const WEBSITE_INTAKE_LIMIT = 10;
 const WEBSITE_INTAKE_WINDOW_MS = 60 * 60 * 1000;
@@ -437,14 +439,12 @@ exports.assignTechOnJobCreate = onDocumentCreated('jobs/{jobId}', async (event) 
 
   const db = getFirestore();
   const jobId = event.params.jobId;
-  const [techsSnap, openSnap] = await Promise.all([
-    db.collection('technicians').get(),
-    db.collection('jobs').where('status', '!=', 'Completed').get(),
-  ]);
-
   const now = Date.now();
   const target = { id: jobId, ...job };
-  const openJobs = openSnap.docs.map((docItem) => ({ id: docItem.id, ...docItem.data() }));
+  const [techsSnap, openJobs] = await Promise.all([
+    db.collection('technicians').get(),
+    openJobsNearWindow(db, getTargetWindowMs(target, now)),
+  ]);
 
   let nearest = null;
   for (const techDoc of techsSnap.docs) {
@@ -474,6 +474,28 @@ exports.assignTechOnJobCreate = onDocumentCreated('jobs/{jobId}', async (event) 
   return null;
 });
 
+// Open jobs that could overlap a window: scheduled up to a day before it or later, or already underway
+const SCHEDULE_LOOKBACK_MS = 24 * 60 * 60 * 1000;
+const UNDERWAY_STATUSES = ['En Route', 'On Site'];
+
+async function openJobsNearWindow(db, span, techEmail = null) {
+  const scope = (query) => (techEmail ? query.where('assignedTechEmail', '==', techEmail) : query);
+  const jobs = db.collection('jobs');
+  const [scheduledSnap, underwaySnap] = await Promise.all([
+    scope(jobs)
+      .where('scheduledFor', '>=', new Date(span.start - SCHEDULE_LOOKBACK_MS))
+      .where('scheduledFor', '<=', new Date(span.end))
+      .get(),
+    scope(jobs).where('status', 'in', UNDERWAY_STATUSES).get(),
+  ]);
+  const byId = new Map();
+  for (const docItem of [...scheduledSnap.docs, ...underwaySnap.docs]) {
+    const job = docItem.data();
+    if (job.status !== 'Completed') byId.set(docItem.id, { id: docItem.id, ...job });
+  }
+  return [...byId.values()];
+}
+
 // Undoes a schedule or technician change that double-books someone, since rules cannot query other jobs
 exports.revertConflictingScheduleChanges = onDocumentUpdated('jobs/{jobId}', async (event) => {
   const before = event.data.before.data();
@@ -481,9 +503,10 @@ exports.revertConflictingScheduleChanges = onDocumentUpdated('jobs/{jobId}', asy
   if (!needsConflictCheck(before, after)) return null;
   const jobId = event.params.jobId;
 
-  const openSnap = await getFirestore().collection('jobs').where('status', '!=', 'Completed').get();
-  const openJobs = openSnap.docs.map((docItem) => ({ id: docItem.id, ...docItem.data() }));
-  if (!hasTechConflict({ id: jobId, ...after }, after.assignedTechEmail, openJobs, Date.now())) return null;
+  const now = Date.now();
+  const target = { id: jobId, ...after };
+  const openJobs = await openJobsNearWindow(getFirestore(), getTargetWindowMs(target, now), after.assignedTechEmail);
+  if (!hasTechConflict(target, after.assignedTechEmail, openJobs, now)) return null;
 
   const revert = { conflictRevertedAt: FieldValue.serverTimestamp() };
   for (const field of REVERT_FIELDS) {
@@ -765,6 +788,135 @@ exports.deleteStaffAccount = onCall(async (request) => {
   ]);
   return { deleted: true };
 });
+
+// Admins create every login here; profile, technician record, and verification email are written server-side
+exports.createStaffAccount = onCall(
+  { secrets: [emailjsServiceId, emailjsTemplateId, emailjsPublicKey, emailjsPrivateKey] },
+  async (request) => {
+    if (request.auth?.token?.role !== 'admin') throw new HttpsError('permission-denied', 'Only admins can create accounts.');
+    const { account, error } = parseStaffAccount(request.data);
+    if (error) throw new HttpsError('invalid-argument', error);
+
+    const db = getFirestore();
+    const user = await getAuth().createUser({
+      email: account.email,
+      password: account.password,
+      displayName: account.name,
+    }).catch((err) => {
+      if (err.code === 'auth/email-already-exists') throw new HttpsError('already-exists', 'An account with that email already exists.');
+      throw err;
+    });
+
+    try {
+      const batch = db.batch();
+      batch.set(db.collection('users').doc(user.uid), {
+        uid: user.uid,
+        displayName: account.name,
+        email: account.email,
+        role: account.role,
+        mustChangePassword: true,
+      });
+      if (account.role === 'tech') {
+        batch.set(db.collection('technicians').doc(user.uid), {
+          uid: user.uid,
+          name: account.name,
+          email: account.email,
+          phone: account.phone,
+          location: account.location,
+          rawLocation: account.rawLocation,
+          lat: account.lat,
+          lng: account.lng,
+          status: 'available',
+          createdAt: new Date(),
+        });
+      }
+      await batch.commit();
+    } catch (err) {
+      await getAuth().deleteUser(user.uid).catch(() => {});
+      throw err;
+    }
+
+    try {
+      const link = await getAuth().generateEmailVerificationLink(account.email);
+      await sendEmailJs(
+        emailjsServiceId.value().trim(),
+        emailjsTemplateId.value().trim(),
+        emailjsPublicKey.value().trim(),
+        emailjsPrivateKey.value().trim(),
+        {
+          to_email:       account.email,
+          to_name:        account.name,
+          job_status:     'Verify your email',
+          job_task:       '',
+          job_location:   '',
+          tech_name:      '',
+          status_message: `Confirm your email address to finish setting up your account: ${link}`,
+          job_id:         '',
+        },
+      );
+    } catch (err) {
+      console.error('Verification email failed', err.message);
+    }
+    return { uid: user.uid };
+  },
+);
+
+const CONTRACT_LEAD_MS = 7 * 24 * 60 * 60 * 1000;
+const CONTRACT_JOBS_PER_RUN = 12;
+
+// Creates one visit only if the contract is still due at that time, so retries and overlapping runs cannot duplicate it
+async function createContractJob(db, contractId, occurrenceMs) {
+  const contractRef = db.collection('maintenanceContracts').doc(contractId);
+  const jobRef = db.collection('jobs').doc(`${contractId}_${occurrenceMs}`);
+  return db.runTransaction(async (tx) => {
+    const snap = await tx.get(contractRef);
+    if (!snap.exists) return false;
+    const contract = snap.data();
+    if (contract.active !== true || toMillisValue(contract.nextRunAt) !== occurrenceMs) return false;
+    tx.set(jobRef, {
+      client: contract.client || '',
+      clientEmail: contract.clientEmail || '',
+      clientPhone: contract.clientPhone || '',
+      location: contract.location || '',
+      rawLocation: contract.rawLocation || '',
+      lat: contract.lat,
+      lng: contract.lng,
+      task: contract.task || '',
+      details: contract.details || '',
+      serialNumber: contract.serialNumber || '',
+      scheduledFor: new Date(occurrenceMs),
+      scheduledEnd: null,
+      status: 'Pending',
+      createdByRole: 'admin',
+      maintenanceContractId: contractId,
+      billingMigrated: true,
+      invoiceSent: false,
+      clientSignedOff: false,
+      createdAt: FieldValue.serverTimestamp(),
+      updatedBy: 'maintenance-contract',
+    });
+    tx.update(contractRef, { nextRunAt: new Date(advanceOccurrence(occurrenceMs, contract.frequency)) });
+    return true;
+  });
+}
+
+// Creates visits for active maintenance contracts that fall within the next week
+exports.createMaintenanceJobs = onSchedule(
+  { schedule: 'every day 06:00', timeZone: 'America/Los_Angeles' },
+  async () => {
+    const db = getFirestore();
+    const contracts = await db.collection('maintenanceContracts').where('active', '==', true).get();
+    const horizon = Date.now() + CONTRACT_LEAD_MS;
+    for (const contract of contracts.docs) {
+      const data = contract.data();
+      const nextRunMs = toMillisValue(data.nextRunAt);
+      if (!nextRunMs || !FREQUENCIES.includes(data.frequency)) continue;
+      for (const occurrenceMs of dueOccurrences(nextRunMs, data.frequency, horizon, CONTRACT_JOBS_PER_RUN)) {
+        if (!(await createContractJob(db, contract.id, occurrenceMs))) break;
+      }
+    }
+  },
+);
 
 // Emails the client when staff send a quote; the client accepts it in the app
 exports.sendQuoteEmailOnSend = onDocumentUpdated(

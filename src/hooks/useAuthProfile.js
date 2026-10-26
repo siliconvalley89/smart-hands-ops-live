@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { collection, doc, getDoc, getDocs, query, updateDoc, where, arrayUnion, deleteField } from 'firebase/firestore';
 import { onAuthStateChanged } from 'firebase/auth';
 import { getToken } from 'firebase/messaging';
@@ -9,11 +9,9 @@ export default function useAuthProfile(setAppError) {
   const [authReady, setAuthReady] = useState(false);
   const [firebaseUser, setFirebaseUser] = useState(null);
   const [profile, setProfile] = useState(null);
-  const suppressAuthStateRef = useRef(false);
 
   useEffect(() => {
     const authUnsub = onAuthStateChanged(auth, async (user) => {
-      if (suppressAuthStateRef.current) return;
       try {
         if (user) setAuthReady(false);
         setFirebaseUser(user);
@@ -76,6 +74,5 @@ export default function useAuthProfile(setAppError) {
     setFirebaseUser,
     profile,
     setProfile,
-    suppressAuthStateRef,
   };
 }
