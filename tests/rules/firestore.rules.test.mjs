@@ -807,8 +807,14 @@ describe('tech checkout and sign-off gates', () => {
     await seedOnsite({
       checkInAt: new Date(Date.now() - 2 * HOUR),
       breaks: [{ startAt, endAt: new Date(startAt.getTime() + 30 * MIN) }],
+      photoCounts: { before: 1, after: 1 },
     });
     await assertSucceeds(techUpdate({ status: 'Ready for Signoff', signoffRequestedAt: new Date() }));
+  });
+
+  it('tech cannot request sign-off without both a before and an after photo', async () => {
+    await seedOnsite({ checkInAt: new Date(Date.now() - 2 * HOUR), photoCounts: { before: 1, after: 0 } });
+    await assertFails(techUpdate({ status: 'Ready for Signoff', signoffRequestedAt: new Date() }));
   });
 
   it('tech cannot request sign-off without a check-in', async () => {

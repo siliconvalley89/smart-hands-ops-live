@@ -220,9 +220,10 @@ service cloud.firestore {
           // Checkout requires a before and an after photo, matching the app's checkout gate
           (request.resource.data.get('checkOutAt', null) == null || resource.data.get('checkOutAt', null) != null ||
             hasBeforeAndAfterPhotos(resource.data)) &&
-          // Sign-off requests need a check-in and no break still running
+          // Sign-off requests need a check-in, no break still running, and before and after photos
           (request.resource.data.status != 'Ready for Signoff' || resource.data.status == 'Ready for Signoff' ||
-            (request.resource.data.get('checkInAt', null) != null && noOpenBreak(request.resource.data)))) ||
+            (request.resource.data.get('checkInAt', null) != null && noOpenBreak(request.resource.data) &&
+              hasBeforeAndAfterPhotos(resource.data)))) ||
         // Clients can only sign off their own job once work is ready; admins mark it Completed
         (isVerifiedClient() && resource.data.clientEmail == request.auth.token.email &&
           resource.data.status == 'Ready for Signoff' &&

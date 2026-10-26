@@ -991,7 +991,10 @@ exports.stripeWebhook = onRequest({ secrets: [stripeSecretKey, stripeWebhookSecr
   const session = event.data.object;
   const jobId = session.metadata?.jobId || session.client_reference_id;
   if (event.type === 'checkout.session.async_payment_failed') {
-    await getFirestore().collection('jobBilling').doc(jobId).update({ 'openCheckout.paymentFailed': true });
+    await getFirestore().collection('jobBilling').doc(jobId).update({ 'openCheckout.paymentFailed': true }).catch((err) => {
+      if (err.code !== 5) throw err;
+      console.warn('Bank payment failed for a job with no billing record', jobId);
+    });
     await notifyAdmins(jobId, {
       title: 'Bank payment failed',
       body: 'A bank transfer for an invoice did not clear.',
