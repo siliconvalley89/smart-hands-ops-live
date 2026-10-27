@@ -57,10 +57,7 @@ const pacificDayAt8am = (dateStr) => {
 };
 
 const turnstileVerified = async (token, req) => {
-  if (typeof token !== 'string' || !token) {
-    console.warn('Website intake missing Turnstile token');
-    return false;
-  }
+  if (typeof token !== 'string' || !token) return false;
   const response = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
     method: 'POST',
     body: new URLSearchParams({
