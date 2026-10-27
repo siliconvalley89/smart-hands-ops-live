@@ -2,11 +2,11 @@ import { useEffect, useState } from 'react';
 import { collection, onSnapshot, orderBy, query } from 'firebase/firestore';
 import { db } from '../firebase';
 
-export default function useTechs(firebaseUser) {
+export default function useTechs(enabled) {
   const [techs, setTechs] = useState([]);
 
   useEffect(() => {
-    if (!firebaseUser) return () => {};
+    if (!enabled) return () => {};
     const q = query(collection(db, 'technicians'), orderBy('name', 'asc'));
     const unsubscribe = onSnapshot(
       q,
@@ -19,7 +19,7 @@ export default function useTechs(firebaseUser) {
       unsubscribe();
       setTechs([]);
     };
-  }, [firebaseUser]);
+  }, [enabled]);
 
   return techs;
 }

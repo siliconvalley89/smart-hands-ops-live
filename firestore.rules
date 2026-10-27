@@ -136,7 +136,7 @@ service cloud.firestore {
     }
 
     match /technicians/{techId} {
-      allow read: if isAdmin() || isAdminAssistant() || isTech() || isClient();
+      allow read: if isAdmin() || isAdminAssistant() || (isTech() && request.auth.uid == techId);
       allow create: if isAdmin();
       allow update: if isAdmin() || (
         isTech() &&

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, lazy, Suspense } from 'react';
 import { db, storage, auth, functions } from './firebase';
 import { httpsCallable } from 'firebase/functions';
-import { collection, addDoc, deleteDoc, doc, updateDoc, setDoc, writeBatch } from 'firebase/firestore';
+import { collection, addDoc, deleteDoc, doc, updateDoc, setDoc, writeBatch, getDoc } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import {
   signInWithEmailAndPassword,
@@ -176,18 +176,23 @@ function App() {
   const { jobs, loading, jobBilling, jobPayments, jobConsumables, completedJobsData, completedLoading, completedTotal } = useJobs({ profile, firebaseUser, showCompletedJobsPanel, completedLimit, setAppError });
   const COMPLETED_PAGE_SIZE = 25;
 
-  const techs = useTechs(firebaseUser);
+  const canReadTechs = profile?.role === 'admin' || profile?.role === 'adminAssistant';
+  const techs = useTechs(canReadTechs);
   const canReadParts = profile?.role === 'admin' || profile?.role === 'adminAssistant' ||
     (['tech', 'seniorConsultant'].includes(profile?.role) && firebaseUser?.emailVerified === true);
   const parts = useParts(canReadParts);
 
   useEffect(() => {
     if (!isFieldRole(profile?.role) || !profile.profilePhotoUrl || !firebaseUser?.uid) return;
-    const mine = techs.find((t) => t.id === firebaseUser.uid);
-    if (mine && mine.profilePhotoUrl !== profile.profilePhotoUrl) {
-      updateDoc(doc(db, 'technicians', firebaseUser.uid), { profilePhotoUrl: profile.profilePhotoUrl }).catch((e) => console.warn('Tech photo sync failed', e));
-    }
-  }, [techs, profile?.role, profile?.profilePhotoUrl, firebaseUser?.uid]);
+    const techRef = doc(db, 'technicians', firebaseUser.uid);
+    getDoc(techRef)
+      .then((snap) => {
+        if (snap.exists() && snap.data().profilePhotoUrl !== profile.profilePhotoUrl) {
+          return updateDoc(techRef, { profilePhotoUrl: profile.profilePhotoUrl });
+        }
+      })
+      .catch((e) => console.warn('Tech photo sync failed', e));
+  }, [profile?.role, profile?.profilePhotoUrl, firebaseUser?.uid]);
 
   const users = useUsers(profile);
 

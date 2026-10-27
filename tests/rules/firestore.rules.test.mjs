@@ -572,11 +572,11 @@ describe('maintenance contracts', () => {
 });
 
 describe('technicians and badges', () => {
-  it('staff and role holders read the technician list; accounts without a role and anonymous users cannot', async () => {
+  it('staff read the technician list; a tech reads only their own record; clients, role-less, and anonymous users read none', async () => {
     await assertSucceeds(getDoc(doc(as.admin(), 'technicians/tech-uid')));
     await assertSucceeds(getDoc(doc(as.assistant(), 'technicians/tech-uid')));
     await assertSucceeds(getDoc(doc(as.tech(), 'technicians/tech-uid')));
-    await assertSucceeds(getDoc(doc(as.client(), 'technicians/tech-uid')));
+    await assertFails(getDoc(doc(as.client(), 'technicians/tech-uid')));
     await assertFails(getDoc(doc(as.noRole(), 'technicians/tech-uid')));
     await assertFails(getDoc(doc(as.anon(), 'technicians/tech-uid')));
   });
