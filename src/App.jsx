@@ -957,27 +957,18 @@ function App() {
   };
 
   const moveJobOnBoard = async (job, { techEmail, startMs }) => {
-    if (!isJobMovable(job)) {
-      setAppError(`${job.status} jobs cannot be moved on the schedule.`);
-      return;
-    }
+    if (!isJobMovable(job)) return `${job.status} jobs cannot be moved on the schedule.`;
     const tech = techs.find((item) => item.email === techEmail);
-    if (!tech) {
-      setAppError('Technician not found.');
-      return;
-    }
+    if (!tech) return 'Technician not found.';
 
     const currentWindow = getJobWindow(job);
     const durationMs = currentWindow ? currentWindow.end - currentWindow.start : JOB_WINDOW_MS;
     const endMs = startMs + durationMs;
     const sameTech = job.assignedTechEmail === tech.email;
-    if (sameTech && currentWindow && currentWindow.start === startMs) return;
+    if (sameTech && currentWindow && currentWindow.start === startMs) return '';
 
     const conflict = findTechConflict({ ...job, scheduledFor: startMs, scheduledEnd: endMs }, tech.email, jobs);
-    if (conflict) {
-      setAppError(conflictMessage(tech.name, conflict));
-      return;
-    }
+    if (conflict) return conflictMessage(tech.name, conflict);
 
     try {
       const updates = {
@@ -988,10 +979,10 @@ function App() {
       };
       if (!sameTech) Object.assign(updates, buildAssignmentUpdates(job, tech));
       await updateDoc(doc(db, 'jobs', job.id), updates);
-      setAppError('');
+      return '';
     } catch (error) {
       console.error('Schedule move failed', error);
-      setAppError('Unable to move this job.');
+      return 'Unable to move this job.';
     }
   };
 
