@@ -10,11 +10,12 @@ const scopedCompletedConstraints = (profile, firebaseUser) => {
   return [where('status', '==', 'Completed')];
 };
 
-export default function useJobs({ profile, firebaseUser, showCompletedJobsPanel, completedLimit, setAppError }) {
+export default function useJobs({ profile, firebaseUser, showCompletedJobsPanel, completedLimit, expandedJobIds, setAppError }) {
   const [jobs, setJobs] = useState([]);
   const [jobBilling, setJobBilling] = useState({});
   const [jobPayments, setJobPayments] = useState({});
   const [jobConsumables, setJobConsumables] = useState({});
+  const [detailStatus, setDetailStatus] = useState({});
   const [loading, setLoading] = useState(true);
   const [completedJobsData, setCompletedJobsData] = useState([]);
   const [completedLoading, setCompletedLoading] = useState(false);
@@ -100,13 +101,20 @@ export default function useJobs({ profile, firebaseUser, showCompletedJobsPanel,
     };
   }, [profile, firebaseUser, showCompletedJobsPanel, completedLimit]);
 
-  const observedJobIds = [...new Set([...jobs, ...completedJobsData].map((job) => job.id))].sort();
-  const observedJobIdsKey = observedJobIds.join('|');
+  // Per-job details load only for expanded open jobs and for the completed panel's jobs
+  const openJobIds = new Set(jobs.map((job) => job.id));
+  const detailJobIds = [...new Set([
+    ...expandedJobIds.filter((id) => openJobIds.has(id)),
+    ...completedJobsData.map((job) => job.id),
+  ])].sort();
+  const detailJobIdsKey = detailJobIds.join('|');
 
   useEffect(() => {
     if (!profile?.role) return () => {};
-    const jobIds = observedJobIdsKey ? observedJobIdsKey.split('|') : [];
+    const jobIds = detailJobIdsKey ? detailJobIdsKey.split('|') : [];
     const subscriptions = [];
+    const markLoaded = (jobId, kind) => setDetailStatus((prev) => ({ ...prev, [jobId]: { ...prev[jobId], [kind]: true } }));
+    const hasBilling = profile.role === 'admin' || profile.role === 'client';
 
     jobIds.forEach((jobId) => {
       subscriptions.push(onSnapshot(
@@ -116,19 +124,21 @@ export default function useJobs({ profile, firebaseUser, showCompletedJobsPanel,
             ...prev,
             [jobId]: snapshot.docs.map((itemDoc) => ({ ...itemDoc.data(), id: itemDoc.id })),
           }));
+          markLoaded(jobId, 'consumables');
         },
         (error) => {
           console.error(`Unable to load consumables for job ${jobId}`, error);
           // Access is lost when a job is reassigned or completed; the jobs listener removes it shortly after
           if (error?.code === 'permission-denied') {
             setJobConsumables((prev) => ({ ...prev, [jobId]: [] }));
+            markLoaded(jobId, 'consumables');
             return;
           }
           setAppError('Unable to load job consumables.');
         },
       ));
 
-      if (profile.role === 'admin' || profile.role === 'client') {
+      if (hasBilling) {
         subscriptions.push(onSnapshot(
           doc(db, 'jobBilling', jobId),
           (snapshot) => {
@@ -136,6 +146,7 @@ export default function useJobs({ profile, firebaseUser, showCompletedJobsPanel,
               ...prev,
               [jobId]: snapshot.exists() ? snapshot.data() : {},
             }));
+            markLoaded(jobId, 'billing');
           },
           (error) => {
             console.error(`Unable to load billing data for job ${jobId}`, error);
@@ -150,6 +161,7 @@ export default function useJobs({ profile, firebaseUser, showCompletedJobsPanel,
               ...prev,
               [jobId]: snapshot.docs.map((paymentDoc) => ({ ...paymentDoc.data(), id: paymentDoc.id })),
             }));
+            markLoaded(jobId, 'payments');
           },
           (error) => {
             console.error(`Unable to load payments for job ${jobId}`, error);
@@ -160,11 +172,11 @@ export default function useJobs({ profile, firebaseUser, showCompletedJobsPanel,
 
     return () => {
       subscriptions.forEach((unsubscribe) => unsubscribe());
-      setJobBilling({});
-      setJobPayments({});
-      setJobConsumables({});
     };
-  }, [observedJobIdsKey, profile?.role, setAppError]);
+  }, [detailJobIdsKey, profile?.role, setAppError]);
+
+  const requiredDetails = profile?.role === 'admin' || profile?.role === 'client' ? ['consumables', 'billing', 'payments'] : ['consumables'];
+  const detailsReady = Object.fromEntries(detailJobIds.map((jobId) => [jobId, requiredDetails.every((kind) => detailStatus[jobId]?.[kind])]));
 
   const hasRole = Boolean(profile?.role);
   return {
@@ -173,6 +185,7 @@ export default function useJobs({ profile, firebaseUser, showCompletedJobsPanel,
     jobBilling,
     jobPayments,
     jobConsumables,
+    detailsReady,
     completedJobsData: hasRole ? completedJobsData : [],
     completedLoading: hasRole && completedLoading,
     completedTotal,

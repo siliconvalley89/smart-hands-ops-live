@@ -30,6 +30,7 @@ export default function ActiveJobs({
   onLoadMoreActive,
   expandedJobIds,
   setExpandedJobIds,
+  detailsReady,
   editingJobId,
   setEditingJobId,
   jobEdits,
@@ -157,6 +158,15 @@ export default function ActiveJobs({
                   {job.scheduledFor && <span className="text-amber-300 text-sm">{formatSchedule(job)}</span>}
                   <span className="ml-auto text-xs text-slate-400">Expand</span>
                 </button>
+              );
+            }
+
+            if (!detailsReady[job.id]) {
+              return (
+                <div key={job.id} className="bg-slate-800 rounded-3xl border border-slate-700 p-5 flex items-center justify-between gap-4">
+                  <span className="text-slate-400 text-sm">Loading job details…</span>
+                  <button type="button" onClick={toggleExpanded} className="rounded-xl border border-slate-600 px-2 py-1 text-xs text-slate-300 hover:bg-slate-700 transition">Collapse</button>
+                </div>
               );
             }
 

@@ -173,7 +173,7 @@ function App() {
   const [jobEdits, setJobEdits] = useState({});
   const [verifyMessage, setVerifyMessage] = useState('');
 
-  const { jobs, loading, jobBilling, jobPayments, jobConsumables, completedJobsData, completedLoading, completedTotal } = useJobs({ profile, firebaseUser, showCompletedJobsPanel, completedLimit, setAppError });
+  const { jobs, loading, jobBilling, jobPayments, jobConsumables, detailsReady, completedJobsData, completedLoading, completedTotal } = useJobs({ profile, firebaseUser, showCompletedJobsPanel, completedLimit, expandedJobIds, setAppError });
   const COMPLETED_PAGE_SIZE = 25;
 
   const canReadTechs = profile?.role === 'admin' || profile?.role === 'adminAssistant';
@@ -1464,6 +1464,7 @@ function App() {
           onLoadMoreActive={() => setActiveLimit((prev) => prev + ACTIVE_PAGE_SIZE)}
           expandedJobIds={expandedJobIds}
           setExpandedJobIds={setExpandedJobIds}
+          detailsReady={detailsReady}
           editingJobId={editingJobId}
           setEditingJobId={setEditingJobId}
           jobEdits={jobEdits}
