@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import { db, auth } from '../firebase';
 import { Wrench, Clock, MapPin, Trash2, List, CheckCircle, Plus, FileText, Shield, Download } from 'lucide-react';
 import { formatSchedule, getJobStatusLabel } from '../lib/jobTime';
+import { formatPacific } from '../lib/pacificTime';
 import { downloadInvoice } from '../lib/invoice';
 import { calcInvoiceTotal } from '../lib/invoiceTotals';
 import { getReceivableStatus } from '../lib/payments';
@@ -568,7 +569,7 @@ export default function ActiveJobs({
                           className="rounded-2xl bg-green-600 px-4 py-2 text-sm font-semibold text-white hover:bg-green-500 transition flex items-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
                         >
                           <Clock size={16} /> {breakTooShort
-                            ? `Back in at ${new Date(breakReturnAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`
+                            ? `Back in at ${formatPacific(breakReturnAt, { hour: 'numeric', minute: '2-digit' })}`
                             : geoEventBusyJobId === job.id ? 'Clocking in...' : 'Clock back in from break'}
                         </button>
                       ) : (

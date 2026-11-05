@@ -1,10 +1,11 @@
 import { Clock, MapPin, Navigation, Phone } from 'lucide-react';
 import { toMillis } from '../lib/jobTime';
+import { formatPacific, formatPacificDay, pacificDayKey, pacificDayOf } from '../lib/pacificTime';
 
 const OPEN_STATUSES = ['Pending', 'Assigned', 'Dispatched', 'En Route', 'On Site'];
 const IN_PROGRESS_STATUSES = ['En Route', 'On Site'];
 
-const timeLabel = (ms) => new Date(ms).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+const timeLabel = (ms) => formatPacific(ms, { hour: 'numeric', minute: '2-digit' });
 
 const directionsUrl = (job) => {
   const destination = job.lat != null && job.lng != null
@@ -46,13 +47,13 @@ function JobCard({ job, timeText }) {
 }
 
 export default function TodayJobs({ activeJobs }) {
-  const todayString = new Date().toDateString();
+  const todayKey = pacificDayKey(pacificDayOf(new Date()));
   const mine = (activeJobs || []).filter((job) => job.assignedTechEmail && OPEN_STATUSES.includes(job.status));
 
   const inProgress = mine.filter((job) => IN_PROGRESS_STATUSES.includes(job.status));
   const scheduledToday = mine
     .filter((job) => !IN_PROGRESS_STATUSES.includes(job.status))
-    .filter((job) => toMillis(job.scheduledFor) != null && new Date(toMillis(job.scheduledFor)).toDateString() === todayString)
+    .filter((job) => toMillis(job.scheduledFor) != null && pacificDayKey(pacificDayOf(toMillis(job.scheduledFor))) === todayKey)
     .sort((a, b) => toMillis(a.scheduledFor) - toMillis(b.scheduledFor));
   const needsTime = mine.filter((job) => !IN_PROGRESS_STATUSES.includes(job.status) && toMillis(job.scheduledFor) == null);
 
@@ -68,7 +69,7 @@ export default function TodayJobs({ activeJobs }) {
     <section className="rounded-3xl bg-slate-800 border border-slate-700 p-5 grid gap-4">
       <div>
         <h2 className="text-xl font-semibold text-white">Today</h2>
-        <p className="text-slate-400 text-sm mt-1">Your jobs for {new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}.</p>
+        <p className="text-slate-400 text-sm mt-1">Your jobs for {formatPacificDay(pacificDayOf(new Date()), { weekday: 'long', month: 'long', day: 'numeric' })}.</p>
       </div>
 
       {nothingToday && (

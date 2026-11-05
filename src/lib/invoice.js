@@ -6,6 +6,7 @@ import logoPath from '../assets/sv-smart-dispatch-logo.jpg';
 import { loadImageDataUrl } from './media';
 import { BUSINESS_NAME } from './branding';
 import { calcInvoiceTotal } from './invoiceTotals';
+import { addPacificDays, formatPacificDate, pacificDayOf, pacificToMs } from './pacificTime';
 
 export const NET_TERMS_DAYS = 30;
 
@@ -23,8 +24,7 @@ export const buildInvoicePdf = async (job) => {
   const logoDataUrl = await loadImageDataUrl(logoPath);
   const billing = await loadInvoiceBilling();
   const signedOffDate = job.adminSignedOffAt ? (job.adminSignedOffAt.toDate ? job.adminSignedOffAt.toDate() : new Date(job.adminSignedOffAt)) : null;
-  const dueDate = signedOffDate ? new Date(signedOffDate) : null;
-  if (dueDate) dueDate.setDate(dueDate.getDate() + NET_TERMS_DAYS);
+  const dueDate = signedOffDate ? new Date(pacificToMs(addPacificDays(pacificDayOf(signedOffDate), NET_TERMS_DAYS))) : null;
 
   const pageWidth = pdf.internal.pageSize.getWidth();
   const pageHeight = pdf.internal.pageSize.getHeight();
@@ -38,7 +38,7 @@ export const buildInvoicePdf = async (job) => {
   const rule = [226, 232, 240];
   const tableHeaderFill = [241, 245, 249];
   const money = (value) => `$${Number(value || 0).toFixed(2)}`;
-  const dateText = (value) => (value ? value.toLocaleDateString() : 'Pending admin sign-off');
+  const dateText = (value) => (value ? formatPacificDate(value) : 'Pending admin sign-off');
   const setText = (size, style, color) => {
     pdf.setFontSize(size);
     pdf.setFont('helvetica', style);

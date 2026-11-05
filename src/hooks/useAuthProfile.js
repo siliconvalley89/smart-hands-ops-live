@@ -4,6 +4,7 @@ import { onAuthStateChanged } from 'firebase/auth';
 import { getToken } from 'firebase/messaging';
 import { db, auth, messaging, VAPID_KEY } from '../firebase';
 import { isFieldRole } from '../lib/roles';
+import { waitForRoleClaim } from '../lib/roleClaim';
 
 export default function useAuthProfile(setAppError) {
   const [authReady, setAuthReady] = useState(false);
@@ -18,17 +19,21 @@ export default function useAuthProfile(setAppError) {
         if (user) {
           const userRef = doc(db, 'users', user.uid);
           const userSnapshot = await getDoc(userRef);
+          let nextProfile = null;
           if (userSnapshot.exists()) {
-            setProfile({ id: userSnapshot.id, ...userSnapshot.data() });
+            nextProfile = { id: userSnapshot.id, ...userSnapshot.data() };
           } else {
             const usersQuery = query(collection(db, 'users'), where('uid', '==', user.uid));
             const querySnapshot = await getDocs(usersQuery);
             if (!querySnapshot.empty) {
-              setProfile({ id: querySnapshot.docs[0].id, ...querySnapshot.docs[0].data() });
-            } else {
-              setProfile(null);
+              nextProfile = { id: querySnapshot.docs[0].id, ...querySnapshot.docs[0].data() };
             }
           }
+          // Firestore rules read the role claim, which syncRoleClaim sets after the user doc changes
+          if (nextProfile && !(await waitForRoleClaim(user, nextProfile.role))) {
+            setAppError('Your account permissions are still being set up. Wait a minute, then sign out and back in.');
+          }
+          setProfile(nextProfile);
         } else {
           setProfile(null);
         }

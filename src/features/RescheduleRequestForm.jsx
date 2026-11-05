@@ -4,7 +4,7 @@ import { CalendarClock } from 'lucide-react';
 import { auth, db } from '../firebase';
 import { formatDate } from '../lib/jobDisplay';
 import { toMillis } from '../lib/jobTime';
-import { localInputToMillis } from '../lib/reschedule';
+import { pacificInputToMillis } from '../lib/pacificTime';
 
 const NOTE_MAX = 500;
 
@@ -48,7 +48,7 @@ export default function RescheduleRequestForm({ job }) {
       setError('Tell us what time works better for you.');
       return;
     }
-    const preferredMs = localInputToMillis(preferred);
+    const preferredMs = pacificInputToMillis(preferred);
     if (preferred && (preferredMs == null || preferredMs <= Date.now())) {
       setError('Choose a future date and time.');
       return;

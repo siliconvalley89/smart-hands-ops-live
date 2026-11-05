@@ -91,7 +91,7 @@ export default function RequestForm({
         </div>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <label className="block">
-            <span className="text-slate-300 text-sm">Scheduled date &amp; start time <span className="text-slate-500 text-xs">(optional, leave blank for immediate dispatch)</span></span>
+            <span className="text-slate-300 text-sm">Scheduled date &amp; start time (Pacific time) <span className="text-slate-500 text-xs">(optional, leave blank for immediate dispatch)</span></span>
             <input
               type="datetime-local"
               value={requestForm.scheduledFor}

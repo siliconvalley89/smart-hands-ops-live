@@ -2,19 +2,14 @@ import { useState } from 'react';
 import { collection, getDocs, query, where } from 'firebase/firestore';
 import { db } from '../firebase';
 import { downloadCsv } from '../lib/csv';
-import { buildTimesheetRows, localDayStart, nextLocalDayStart, timesheetCsvRows, toDateInput } from '../lib/timesheets';
-
-const monthStartInput = () => {
-  const now = new Date();
-  return toDateInput(new Date(now.getFullYear(), now.getMonth(), 1));
-};
+import { buildTimesheetRows, monthStartInput, nextPacificDayStart, pacificDayStart, timesheetCsvRows, toDateInput } from '../lib/timesheets';
 
 const formatHours = (minutes) => (minutes == null ? '—' : (minutes / 60).toFixed(2));
 
 export default function TimesheetExport() {
   const [expanded, setExpanded] = useState(false);
   const [from, setFrom] = useState(monthStartInput);
-  const [to, setTo] = useState(() => toDateInput(new Date()));
+  const [to, setTo] = useState(() => toDateInput(Date.now()));
   const [rows, setRows] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -30,8 +25,8 @@ export default function TimesheetExport() {
     try {
       const snapshot = await getDocs(query(
         collection(db, 'jobs'),
-        where('checkInAt', '>=', localDayStart(from)),
-        where('checkInAt', '<', nextLocalDayStart(to)),
+        where('checkInAt', '>=', pacificDayStart(from)),
+        where('checkInAt', '<', nextPacificDayStart(to)),
       ));
       setRows(buildTimesheetRows(snapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() }))));
     } catch (err) {

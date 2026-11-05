@@ -1,15 +1,14 @@
 import { useState } from 'react';
 import { downloadCsv } from '../lib/csv';
 import { PAYMENT_METHODS, recordPayment, voidPayment } from '../lib/payments';
+import { formatPacificDate, pacificInputToMillis } from '../lib/pacificTime';
+import { toDateInput } from '../lib/timesheets';
 
 const money = (value) => `$${Number(value || 0).toFixed(2)}`;
 const toDate = (value) => (value?.toDate ? value.toDate() : value ? new Date(value) : null);
 const toTime = (value) => toDate(value)?.getTime() ?? 0;
-const formatDay = (date) => (date ? date.toLocaleDateString() : 'Pending sign-off');
-const todayInput = () => {
-  const now = new Date();
-  return new Date(now.getTime() - now.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
-};
+const formatDay = (date) => (date ? formatPacificDate(date) : 'Pending sign-off');
+const todayInput = () => toDateInput(Date.now());
 
 const EMPTY_FORM = { amount: '', method: 'check', reference: '', receivedDate: '' };
 const STATUS_STYLES = {
@@ -61,7 +60,7 @@ export default function Receivables({ rows, recordedBy }) {
         amount,
         method: form.method,
         reference: form.reference.trim(),
-        receivedAt: new Date(`${form.receivedDate}T12:00:00`),
+        receivedAt: new Date(pacificInputToMillis(`${form.receivedDate}T12:00`)),
         recordedBy,
       });
       setOpenJobId(null);
@@ -103,7 +102,7 @@ export default function Receivables({ rows, recordedBy }) {
       receivable.total.toFixed(2),
       receivable.paid.toFixed(2),
       receivable.balance.toFixed(2),
-      receivable.dueDate ? receivable.dueDate.toISOString().slice(0, 10) : '',
+      receivable.dueDate ? toDateInput(receivable.dueDate) : '',
       receivable.daysOverdue,
       receivable.status,
     ]);

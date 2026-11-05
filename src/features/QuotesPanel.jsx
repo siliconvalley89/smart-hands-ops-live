@@ -4,6 +4,8 @@ import { db } from '../firebase';
 import useQuotes from '../hooks/useQuotes';
 import { isQuoteExpired, quoteTotal } from '../lib/quotes';
 import { geocodeAddress } from '../lib/geocode';
+import { toDateInput, nextPacificDayStart } from '../lib/timesheets';
+import { addPacificDays, formatPacificDate, pacificDayKey, pacificDayOf } from '../lib/pacificTime';
 
 const DEFAULT_VALID_DAYS = 30;
 const MAX_LINES = 50;
@@ -11,22 +13,18 @@ const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const inputClass = 'rounded-2xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-teal-500';
 const STATUS_CLASS = { Draft: 'text-slate-300', Sent: 'text-amber-300', Accepted: 'text-teal-300', Withdrawn: 'text-rose-300' };
 
-const pad = (n) => String(n).padStart(2, '0');
-const toDateInput = (date) => `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
-const endOfDay = (dateInput) => new Date(`${dateInput}T23:59:59`);
-const formatDate = (timestamp) => (timestamp?.toDate ? timestamp.toDate().toLocaleDateString() : '—');
+const endOfDay = (dateInput) => new Date(nextPacificDayStart(dateInput).getTime() - 1000);
+const formatDate = (timestamp) => (timestamp?.toDate ? formatPacificDate(timestamp.toDate()) : '—');
 const money = (amount) => `$${Number(amount || 0).toFixed(2)}`;
 
 const emptyLine = () => ({ description: '', qty: '1', unitPrice: '' });
 
-const emptyQuote = () => {
-  const validUntil = new Date();
-  validUntil.setDate(validUntil.getDate() + DEFAULT_VALID_DAYS);
-  return {
-    client: '', clientEmail: '', clientPhone: '', location: '', task: '', details: '',
-    serviceFee: '', serviceFeeDescription: '', validUntil: toDateInput(validUntil), lines: [emptyLine()],
-  };
-};
+const emptyQuote = () => ({
+  client: '', clientEmail: '', clientPhone: '', location: '', task: '', details: '',
+  serviceFee: '', serviceFeeDescription: '',
+  validUntil: pacificDayKey(addPacificDays(pacificDayOf(Date.now()), DEFAULT_VALID_DAYS)),
+  lines: [emptyLine()],
+});
 
 const quoteToForm = (quote) => ({
   client: quote.client || '',

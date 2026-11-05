@@ -4,7 +4,8 @@ import { CalendarClock } from 'lucide-react';
 import { auth, db } from '../firebase';
 import { formatDate } from '../lib/jobDisplay';
 import { conflictMessage, findTechConflict, formatSchedule, toMillis } from '../lib/jobTime';
-import { approvedScheduleFields, jobWindowMs, localInputToMillis, toDateTimeLocal } from '../lib/reschedule';
+import { approvedScheduleFields, jobWindowMs } from '../lib/reschedule';
+import { pacificInputToMillis, toPacificInputValue } from '../lib/pacificTime';
 
 const MOVABLE_STATUSES = ['Pending', 'Assigned', 'Dispatched'];
 
@@ -32,7 +33,7 @@ export default function RescheduleRequests({ activeJobs, jobs, askConfirm, setAp
   if (requests.length === 0) return null;
 
   const jobById = new Map(activeJobs.map((job) => [job.id, job]));
-  const defaultTime = (request) => (request.preferredFor ? toDateTimeLocal(toMillis(request.preferredFor)) : '');
+  const defaultTime = (request) => (request.preferredFor ? toPacificInputValue(toMillis(request.preferredFor)) : '');
   const timeFor = (request) => times[request.id] ?? defaultTime(request);
 
   const resolve = async (request, status, jobUpdates = null) => {
@@ -60,7 +61,7 @@ export default function RescheduleRequests({ activeJobs, jobs, askConfirm, setAp
   };
 
   const approve = async (request, job) => {
-    const startMs = localInputToMillis(timeFor(request));
+    const startMs = pacificInputToMillis(timeFor(request));
     if (startMs == null) {
       setAppError('Choose the approved date and time first.');
       return;

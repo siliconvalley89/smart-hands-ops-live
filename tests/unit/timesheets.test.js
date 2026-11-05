@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildTimesheetRows, nextLocalDayStart, timesheetCsvRows, toDateInput } from '../../src/lib/timesheets';
+import { buildTimesheetRows, nextPacificDayStart, pacificDayStart, timesheetCsvRows, toDateInput } from '../../src/lib/timesheets';
 
 const at = (iso) => new Date(iso);
 
@@ -81,12 +81,14 @@ describe('timesheetCsvRows', () => {
   });
 });
 
-describe('local day helpers', () => {
-  it('formats a date as a local YYYY-MM-DD input value', () => {
-    expect(toDateInput(new Date(2026, 9, 5, 23, 30))).toBe('2026-10-05');
+describe('Pacific day helpers', () => {
+  it('formats a date as the Pacific calendar day it falls on', () => {
+    expect(toDateInput(new Date('2026-10-06T06:30:00Z'))).toBe('2026-10-05');
   });
 
-  it('returns the start of the following local day, across a month boundary', () => {
-    expect(nextLocalDayStart('2026-10-31')).toEqual(new Date(2026, 10, 1));
+  it('returns the Pacific midnight that starts a day, including after the November DST change', () => {
+    expect(pacificDayStart('2026-10-05')).toEqual(new Date('2026-10-05T07:00:00Z'));
+    expect(nextPacificDayStart('2026-10-31')).toEqual(new Date('2026-11-01T07:00:00Z'));
+    expect(pacificDayStart('2026-11-02')).toEqual(new Date('2026-11-02T08:00:00Z'));
   });
 });

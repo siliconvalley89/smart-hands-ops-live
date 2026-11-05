@@ -7,12 +7,20 @@ import {
   findTechConflict,
   getDayPlacement,
   getJobWindow,
-  getWeekDays,
   isJobAssigned,
   isJobMovable,
-  minuteOfDayToMs,
   snapMinute,
 } from '../lib/jobTime';
+import {
+  addPacificDays,
+  formatPacific,
+  formatPacificDay,
+  pacificDayKey,
+  pacificDayOf,
+  pacificMinuteMs,
+  pacificParts,
+  pacificWeekDays,
+} from '../lib/pacificTime';
 
 const PX_PER_MINUTE = 1;
 const GRID_HEIGHT = (BOARD_END_MINUTE - BOARD_START_MINUTE) * PX_PER_MINUTE;
@@ -20,9 +28,10 @@ const HOUR_LINES = `repeating-linear-gradient(to bottom, transparent 0, transpar
 const UNASSIGNED = '__unassigned__';
 const MIN_BLOCK_PX = 24;
 
-const timeLabel = (ms) => new Date(ms).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
-const dayLabel = (day) => day.toLocaleDateString('en-US', { weekday: 'short', month: 'numeric', day: 'numeric' });
+const timeLabel = (ms) => formatPacific(ms, { hour: 'numeric', minute: '2-digit' });
+const dayLabel = (day) => formatPacificDay(day, { weekday: 'short', month: 'numeric', day: 'numeric' });
 const pad = (value) => String(value).padStart(2, '0');
+const todayKey = () => pacificDayKey(pacificDayOf(Date.now()));
 
 function JobCard({ dragId, job, movable, onOpen, className, style, children }) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
@@ -52,8 +61,9 @@ function JobCard({ dragId, job, movable, onOpen, className, style, children }) {
   );
 }
 
-function DayCell({ rowKey, dayMs, enabled, className, style, children }) {
-  const { setNodeRef, isOver } = useDroppable({ id: `${rowKey}|${dayMs}`, data: { rowKey, dayMs }, disabled: !enabled });
+function DayCell({ rowKey, day, enabled, className, style, children }) {
+  const dayKey = pacificDayKey(day);
+  const { setNodeRef, isOver } = useDroppable({ id: `${rowKey}|${dayKey}`, data: { rowKey, day }, disabled: !enabled });
   return (
     <div ref={setNodeRef} className={`${className} ${isOver ? 'bg-teal-900/30' : ''}`} style={style}>
       {children}
@@ -62,7 +72,7 @@ function DayCell({ rowKey, dayMs, enabled, className, style, children }) {
 }
 
 export default function SchedulingBoard({ activeJobs, techs, onMoveJob }) {
-  const [anchor, setAnchor] = useState(() => new Date());
+  const [anchor, setAnchor] = useState(() => pacificDayOf(Date.now()));
   const [showGrid, setShowGrid] = useState(() => window.matchMedia('(min-width: 768px)').matches);
   const [moveDraft, setMoveDraft] = useState(null);
   const [moveError, setMoveError] = useState('');
@@ -71,8 +81,8 @@ export default function SchedulingBoard({ activeJobs, techs, onMoveJob }) {
   const errorRef = useRef(null);
   const formRef = useRef(null);
   const movingJobId = moveDraft?.job.id;
-  const days = getWeekDays(anchor);
-  const todayString = new Date().toDateString();
+  const days = pacificWeekDays(anchor);
+  const today = todayKey();
 
   const sensors = useSensors(
     useSensor(MouseSensor, { activationConstraint: { distance: 6 } }),
@@ -108,7 +118,7 @@ export default function SchedulingBoard({ activeJobs, techs, onMoveJob }) {
     ? [...techRows, { key: UNASSIGNED, tech: null }]
     : techRows;
 
-  const shiftWeeks = (weeks) => setAnchor((prev) => new Date(prev.getFullYear(), prev.getMonth(), prev.getDate() + weeks * 7));
+  const shiftWeeks = (weeks) => setAnchor((prev) => addPacificDays(prev, weeks * 7));
 
   const requestMove = async (job, change) => {
     setBoardError('');
@@ -124,22 +134,23 @@ export default function SchedulingBoard({ activeJobs, techs, onMoveJob }) {
     if (!over || !translated) return;
     const job = activeJobs.find((item) => item.id === active.data.current.jobId);
     if (!job) return;
-    const { rowKey, dayMs } = over.data.current;
+    const { rowKey, day } = over.data.current;
     const minute = snapMinute(BOARD_START_MINUTE + (translated.top - over.rect.top) / PX_PER_MINUTE);
     const clamped = Math.min(Math.max(minute, BOARD_START_MINUTE), BOARD_END_MINUTE - 30);
-    requestMove(job, { techEmail: rowKey, startMs: minuteOfDayToMs(new Date(dayMs), clamped) });
+    requestMove(job, { techEmail: rowKey, startMs: pacificMinuteMs(day, clamped) });
   };
 
   const openMove = (job) => {
     setBoardError('');
     const win = getJobWindow(job);
-    const start = win ? new Date(win.start) : null;
-    const dayIndex = start ? days.findIndex((day) => day.toDateString() === start.toDateString()) : -1;
+    const startDay = win ? pacificDayKey(pacificDayOf(win.start)) : null;
+    const dayIndex = startDay ? days.findIndex((day) => pacificDayKey(day) === startDay) : -1;
+    const start = win ? pacificParts(win.start) : null;
     setMoveDraft({
       job,
       techEmail: job.assignedTechEmail || techRows[0]?.key || '',
       dayIndex: dayIndex >= 0 ? dayIndex : 0,
-      time: start ? `${pad(start.getHours())}:${pad(start.getMinutes())}` : '08:00',
+      time: start ? `${pad(start.hour)}:${pad(start.minute)}` : '08:00',
     });
     setMoveError('');
   };
@@ -161,7 +172,7 @@ export default function SchedulingBoard({ activeJobs, techs, onMoveJob }) {
       setMoveError('Choose a tech.');
       return;
     }
-    const message = await onMoveJob(moveDraft.job, { techEmail: moveDraft.techEmail, startMs: minuteOfDayToMs(days[moveDraft.dayIndex], minute) });
+    const message = await onMoveJob(moveDraft.job, { techEmail: moveDraft.techEmail, startMs: pacificMinuteMs(days[moveDraft.dayIndex], minute) });
     if (message) {
       setMoveError(message);
       return;
@@ -181,15 +192,15 @@ export default function SchedulingBoard({ activeJobs, techs, onMoveJob }) {
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-3xl bg-slate-800 border border-slate-700 p-4">
           <div>
             <h2 className="text-xl font-semibold text-white">Schedule</h2>
-            <p className="text-slate-400 text-sm mt-1">Drag an open job, or tap it and choose Move, to change its time, its tech, or both.</p>
+            <p className="text-slate-400 text-sm mt-1">Drag an open job, or tap it and choose Move, to change its time, its tech, or both. All times are Pacific (PT).</p>
           </div>
           <div className="flex items-center gap-2 text-sm">
             <button type="button" onClick={() => shiftWeeks(-1)} className="rounded-2xl border border-slate-600 px-3 py-2 text-slate-200 hover:bg-slate-700 transition">Prev</button>
-            <button type="button" onClick={() => setAnchor(new Date())} className="rounded-2xl border border-slate-600 px-3 py-2 text-slate-200 hover:bg-slate-700 transition">Today</button>
+            <button type="button" onClick={() => setAnchor(pacificDayOf(Date.now()))} className="rounded-2xl border border-slate-600 px-3 py-2 text-slate-200 hover:bg-slate-700 transition">Today</button>
             <button type="button" onClick={() => shiftWeeks(1)} className="rounded-2xl border border-slate-600 px-3 py-2 text-slate-200 hover:bg-slate-700 transition">Next</button>
             <button type="button" onClick={() => setShowGrid((prev) => !prev)} className="rounded-2xl border border-slate-600 px-3 py-2 text-slate-200 hover:bg-slate-700 transition">{showGrid ? 'Collapse' : 'Expand'}</button>
             <span className="ml-2 text-slate-300 whitespace-nowrap">
-              {days[0].toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} – {days[6].toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+              {formatPacificDay(days[0], { month: 'short', day: 'numeric' })} – {formatPacificDay(days[6], { month: 'short', day: 'numeric', year: 'numeric' })}
             </span>
           </div>
         </div>
@@ -217,11 +228,11 @@ export default function SchedulingBoard({ activeJobs, techs, onMoveJob }) {
                 onChange={(e) => setMoveDraft((prev) => ({ ...prev, dayIndex: Number(e.target.value) }))}
                 className="rounded-2xl bg-slate-800 border border-slate-600 px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-teal-500"
               >
-                {days.map((day, index) => <option key={day.getTime()} value={index}>{dayLabel(day)}</option>)}
+                {days.map((day, index) => <option key={pacificDayKey(day)} value={index}>{dayLabel(day)}</option>)}
               </select>
             </label>
             <label className="grid gap-1 text-xs text-slate-400">
-              Start
+              Start (PT)
               <input
                 type="time"
                 value={moveDraft.time}
@@ -248,7 +259,7 @@ export default function SchedulingBoard({ activeJobs, techs, onMoveJob }) {
               <div className="grid text-xs text-slate-400" style={{ gridTemplateColumns: '140px repeat(7, minmax(130px, 1fr))' }}>
                 <div className="p-2" />
                 {days.map((day) => (
-                  <div key={day.getTime()} className={`p-2 border-l border-slate-700 text-center ${day.toDateString() === todayString ? 'text-teal-300 font-semibold' : ''}`}>
+                  <div key={pacificDayKey(day)} className={`p-2 border-l border-slate-700 text-center ${pacificDayKey(day) === today ? 'text-teal-300 font-semibold' : ''}`}>
                     {dayLabel(day)}
                   </div>
                 ))}
@@ -263,9 +274,9 @@ export default function SchedulingBoard({ activeJobs, techs, onMoveJob }) {
                   </div>
                   {days.map((day) => (
                     <DayCell
-                      key={day.getTime()}
+                      key={pacificDayKey(day)}
                       rowKey={row.key}
-                      dayMs={day.getTime()}
+                      day={day}
                       enabled={row.key !== UNASSIGNED}
                       className="relative border-l border-slate-700"
                       style={{ height: GRID_HEIGHT, backgroundImage: HOUR_LINES }}
@@ -276,8 +287,8 @@ export default function SchedulingBoard({ activeJobs, techs, onMoveJob }) {
                         .filter((item) => item.place)
                         .map(({ job, win, place, conflicted }) => (
                           <JobCard
-                            key={`${job.id}-${day.getTime()}`}
-                            dragId={`${job.id}|${day.getTime()}`}
+                            key={`${job.id}-${pacificDayKey(day)}`}
+                            dragId={`${job.id}|${pacificDayKey(day)}`}
                             job={job}
                             movable={isJobMovable(job)}
                             onOpen={() => openMove(job)}

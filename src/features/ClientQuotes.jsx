@@ -4,10 +4,11 @@ import { doc, onSnapshot } from 'firebase/firestore';
 import { db, functions } from '../firebase';
 import useQuotes from '../hooks/useQuotes';
 import { canAcceptQuote, isQuoteExpired, quoteTotal } from '../lib/quotes';
+import { formatPacificDate } from '../lib/pacificTime';
 
 const acceptQuoteCall = httpsCallable(functions, 'acceptQuote');
 const money = (amount) => `$${Number(amount || 0).toFixed(2)}`;
-const formatDate = (timestamp) => (timestamp?.toDate ? timestamp.toDate().toLocaleDateString() : '—');
+const formatDate = (timestamp) => (timestamp?.toDate ? formatPacificDate(timestamp.toDate()) : '—');
 
 function AcceptedJobStatus({ jobId }) {
   const [status, setStatus] = useState(null);

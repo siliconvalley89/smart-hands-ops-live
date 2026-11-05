@@ -1,3 +1,5 @@
+import { formatPacificDate, pacificDayKey, pacificDayOf, pacificMinuteMs, pacificParts } from './pacificTime';
+
 export const JOB_WINDOW_MS = 2 * 60 * 60 * 1000;
 
 export const toMillis = (value) => {
@@ -30,20 +32,21 @@ export const getJobWindow = (job, now = Date.now()) => {
   return null;
 };
 
-// e.g. "10/19/2026 1000-1800" (or just date and start time when no end time was set)
+// e.g. "10/19/2026 1000-1800 PT" (or just date and start time when no end time was set)
 export const formatSchedule = (job) => {
   const start = toMillis(job.scheduledFor);
   if (start == null) return '';
-  const pad = (n) => String(n).padStart(2, '0');
-  const s = new Date(start);
-  const hhmm = (d) => `${pad(d.getHours())}${pad(d.getMinutes())}`;
-  const datePart = s.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' });
+  const datePart = formatPacificDate(start);
   const end = toMillis(job.scheduledEnd);
-  if (end == null) return `${datePart} ${hhmm(s)}`;
-  const e = new Date(end);
-  const nextDay = e.toDateString() !== s.toDateString();
-  const endDatePart = nextDay ? e.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' }) + ' ' : '';
-  return `${datePart} ${hhmm(s)}-${endDatePart}${hhmm(e)}`;
+  if (end == null) return `${datePart} ${pacificHhmm(start)} PT`;
+  const nextDay = pacificDayKey(pacificDayOf(end)) !== pacificDayKey(pacificDayOf(start));
+  const endDatePart = nextDay ? `${formatPacificDate(end)} ` : '';
+  return `${datePart} ${pacificHhmm(start)}-${endDatePart}${pacificHhmm(end)} PT`;
+};
+
+const pacificHhmm = (ms) => {
+  const { hour, minute } = pacificParts(ms);
+  return `${String(hour).padStart(2, '0')}${String(minute).padStart(2, '0')}`;
 };
 
 export const BOARD_START_MINUTE = 6 * 60;
@@ -51,21 +54,12 @@ export const BOARD_END_MINUTE = 22 * 60;
 export const MOVABLE_STATUSES = ['Pending', 'Assigned', 'Dispatched'];
 export const isJobMovable = (job) => MOVABLE_STATUSES.includes(job.status);
 
-export const getWeekDays = (anchor) => {
-  const d = new Date(anchor);
-  const offset = (d.getDay() + 6) % 7;
-  return Array.from({ length: 7 }, (_, i) => new Date(d.getFullYear(), d.getMonth(), d.getDate() - offset + i));
-};
-
-export const minuteOfDayToMs = (day, minute) =>
-  new Date(day.getFullYear(), day.getMonth(), day.getDate(), 0, minute).getTime();
-
 export const snapMinute = (minute, step = 30) => Math.round(minute / step) * step;
 
-// Returns the part of a window that falls on one day within the board's visible hours, as pixel-ready minutes
+// Returns the part of a window that falls on one Pacific day within the board's visible hours, as pixel-ready minutes
 export const getDayPlacement = (window, day) => {
-  const boardStart = minuteOfDayToMs(day, BOARD_START_MINUTE);
-  const boardEnd = minuteOfDayToMs(day, BOARD_END_MINUTE);
+  const boardStart = pacificMinuteMs(day, BOARD_START_MINUTE);
+  const boardEnd = pacificMinuteMs(day, BOARD_END_MINUTE);
   const start = Math.max(window.start, boardStart);
   const end = Math.min(window.end, boardEnd);
   if (end <= start) return null;

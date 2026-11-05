@@ -1,15 +1,23 @@
 import { toMillis } from './jobTime';
+import { addPacificDays, pacificDayKey, pacificDayOf, pacificToMs } from './pacificTime';
 
 const MINUTE_MS = 60 * 1000;
 
-export const toDateInput = (date) => new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
-
-export const localDayStart = (dateInput) => new Date(`${dateInput}T00:00`);
-
-export const nextLocalDayStart = (dateInput) => {
-  const day = localDayStart(dateInput);
-  return new Date(day.getFullYear(), day.getMonth(), day.getDate() + 1);
+const parseDayInput = (dateInput) => {
+  const [year, month, day] = dateInput.split('-').map(Number);
+  return { year, month, day };
 };
+
+export const toDateInput = (value) => pacificDayKey(pacificDayOf(value));
+
+export const monthStartInput = () => {
+  const { year, month } = pacificDayOf(Date.now());
+  return pacificDayKey({ year, month, day: 1 });
+};
+
+export const pacificDayStart = (dateInput) => new Date(pacificToMs(parseDayInput(dateInput)));
+
+export const nextPacificDayStart = (dateInput) => new Date(pacificToMs(addPacificDays(parseDayInput(dateInput), 1)));
 
 export const TIMESHEET_HEADER = [
   'Date', 'Tech', 'Email', 'Job ID', 'Client', 'Task', 'Check-in', 'Check-out',
@@ -32,7 +40,7 @@ export const buildTimesheetRows = (jobs) => jobs
     if (checkOut == null) flags.push('Still on site');
     if (breaks.some((brk) => toMillis(brk.startAt) != null && toMillis(brk.endAt) == null)) flags.push('Open break');
     return {
-      date: new Date(checkIn).toLocaleDateString('en-CA'),
+      date: pacificDayKey(pacificDayOf(checkIn)),
       techName: job.checkInTechName || job.assignedTechName || '',
       techEmail: job.checkInTechEmail || job.assignedTechEmail || '',
       jobId: job.id,

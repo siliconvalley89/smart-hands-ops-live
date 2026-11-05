@@ -3,21 +3,16 @@ import { collection, getDocs, query, where } from 'firebase/firestore';
 import { db } from '../firebase';
 import { downloadCsv } from '../lib/csv';
 import { buildReport, reportCsvRows } from '../lib/reports';
-import { localDayStart, nextLocalDayStart, toDateInput } from '../lib/timesheets';
+import { monthStartInput, nextPacificDayStart, pacificDayStart, toDateInput } from '../lib/timesheets';
 
 const money = (value) => `$${Number(value || 0).toFixed(2)}`;
 const minutesLabel = (value) => (value == null ? '—' : `${Math.round(value)} min`);
 const percentLabel = (value) => (value == null ? '—' : `${Math.round(value * 100)}%`);
 
-const monthStartInput = () => {
-  const now = new Date();
-  return toDateInput(new Date(now.getFullYear(), now.getMonth(), 1));
-};
-
 export default function ReportsPanel() {
   const [expanded, setExpanded] = useState(false);
   const [from, setFrom] = useState(monthStartInput);
-  const [to, setTo] = useState(() => toDateInput(new Date()));
+  const [to, setTo] = useState(() => toDateInput(Date.now()));
   const [report, setReport] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -33,8 +28,8 @@ export default function ReportsPanel() {
     try {
       const snapshot = await getDocs(query(
         collection(db, 'jobs'),
-        where('createdAt', '>=', localDayStart(from)),
-        where('createdAt', '<', nextLocalDayStart(to)),
+        where('createdAt', '>=', pacificDayStart(from)),
+        where('createdAt', '<', nextPacificDayStart(to)),
       ));
       const jobs = snapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() }));
       const signedOffJobs = jobs.filter((job) => job.adminSignedOffAt);

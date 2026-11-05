@@ -1,9 +1,13 @@
 import { toMillis } from './jobTime';
+import { formatPacific } from './pacificTime';
+
+const DATE_TIME = { year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: '2-digit' };
+const TIME = { hour: 'numeric', minute: '2-digit' };
 
 export const formatDate = (value) => {
   if (!value) return '';
-  if (value?.toDate) return value.toDate().toLocaleString();
-  return new Date(value).toLocaleString();
+  if (value?.toDate) return formatPacific(value.toDate(), DATE_TIME);
+  return formatPacific(value, DATE_TIME);
 };
 
 export const getPhotoCount = (job, type) => {
@@ -29,7 +33,7 @@ export const getBreakStartBlock = (job, now = Date.now()) => {
   }
   const availableAt = toMillis(job.checkInAt) + SECOND_BREAK_AFTER_MS;
   if (now >= availableAt) return null;
-  const time = new Date(availableAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  const time = formatPacific(availableAt, TIME);
   return { label: `Second break at ${time}`, message: `A second break is available at ${time}, after 12 hours on site.` };
 };
 

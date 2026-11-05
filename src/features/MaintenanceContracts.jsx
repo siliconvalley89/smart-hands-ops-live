@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { addDoc, collection, deleteDoc, doc, onSnapshot, serverTimestamp, updateDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { geocodeAddress } from '../lib/geocode';
+import { formatPacificDate, pacificInputToMillis } from '../lib/pacificTime';
 
 const EMPTY_FORM = {
   client: '',
@@ -17,7 +18,7 @@ const EMPTY_FORM = {
 
 const FREQUENCY_LABELS = { weekly: 'Weekly', monthly: 'Monthly' };
 const toDate = (value) => (value?.toDate ? value.toDate() : value ? new Date(value) : null);
-const formatDay = (date) => (date ? date.toLocaleDateString() : '—');
+const formatDay = (date) => (date ? formatPacificDate(date) : '—');
 
 export default function MaintenanceContracts({ recordedBy }) {
   const [contracts, setContracts] = useState([]);
@@ -62,7 +63,7 @@ export default function MaintenanceContracts({ recordedBy }) {
         serialNumber: form.serialNumber.trim(),
         frequency: form.frequency,
         active: true,
-        nextRunAt: new Date(`${form.firstVisit}T09:00:00`),
+        nextRunAt: new Date(pacificInputToMillis(`${form.firstVisit}T09:00`)),
         createdBy: recordedBy,
         createdAt: serverTimestamp(),
       });

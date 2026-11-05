@@ -14,6 +14,7 @@ import {
 } from 'firebase/auth';
 import logoPath from './assets/sv-smart-dispatch-logo.jpg';
 import { isJobDispatched, isJobAssigned, isJobMovable, findTechConflict, conflictMessage, getJobWindow, JOB_WINDOW_MS } from './lib/jobTime';
+import { addPacificDays, formatPacific, pacificDayOf, pacificInputToMillis, pacificMinuteMs } from './lib/pacificTime';
 import { calculateDistanceMiles } from './lib/geo';
 import { geocodeAddress } from './lib/geocode';
 import { MAX_ATTACHMENT_BYTES, ATTACHMENT_ACCEPT, PHOTO_MAX_DIMENSION, PHOTO_JPEG_QUALITY, downloadPhotoFile, fileToSquareDataUrl, compressPhotoForUpload } from './lib/media';
@@ -268,16 +269,16 @@ function App() {
 
     try {
       const geo = await geocodeAddress(requestForm.location);
-      const scheduledDate = requestForm.scheduledFor ? new Date(requestForm.scheduledFor) : null;
+      const scheduledMs = pacificInputToMillis(requestForm.scheduledFor);
+      const scheduledDate = scheduledMs != null ? new Date(scheduledMs) : null;
       let scheduledEndDate = null;
       if (scheduledDate && requestForm.scheduledEndTime) {
         const [h, m] = requestForm.scheduledEndTime.split(':').map(Number);
-        scheduledEndDate = new Date(scheduledDate);
-        scheduledEndDate.setHours(h, m, 0, 0);
+        const startDay = pacificDayOf(scheduledMs);
+        let endMs = pacificMinuteMs(startDay, h * 60 + m);
         // An end time at or before the start time means the job rolls overnight into the next day
-        if (scheduledEndDate <= scheduledDate) {
-          scheduledEndDate.setDate(scheduledEndDate.getDate() + 1);
-        }
+        if (endMs <= scheduledMs) endMs = pacificMinuteMs(addPacificDays(startDay, 1), h * 60 + m);
+        scheduledEndDate = new Date(endMs);
       }
       // The assignTechOnJobCreate function assigns the technician after the job is created
       await addDoc(collection(db, 'jobs'), {
@@ -438,7 +439,7 @@ function App() {
     if (eventType === 'breakEnd') {
       const returnAt = getBreakReturnTime(job);
       if (returnAt && Date.now() < returnAt) {
-        setAppError(`You can clock back in at ${new Date(returnAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}. Breaks must last at least 30 minutes.`);
+        setAppError(`You can clock back in at ${formatPacific(returnAt, { hour: 'numeric', minute: '2-digit' })}. Breaks must last at least 30 minutes.`);
         return;
       }
     }
