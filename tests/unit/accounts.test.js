@@ -31,8 +31,20 @@ describe('parseStaffAccount', () => {
     expect(account).not.toHaveProperty('lat');
   });
 
+  it('creates an admin assistant without a base location', () => {
+    const { account, error } = parseStaffAccount({ email: 'aa@example.com', password: 'secret1', name: 'Aya', role: 'adminAssistant' });
+    expect(error).toBeUndefined();
+    expect(account).toMatchObject({ role: 'adminAssistant' });
+    expect(account).not.toHaveProperty('lat');
+  });
+
+  it('requires a located base for senior consultants, like technicians', () => {
+    expect(parseStaffAccount({ ...techInput, role: 'seniorConsultant' })).toMatchObject({ account: { role: 'seniorConsultant', lat: 37.33 } });
+    expect(parseStaffAccount({ ...techInput, role: 'seniorConsultant', lat: undefined }).error).toMatch(/could not be located/);
+  });
+
   it('rejects roles that staff cannot be created with', () => {
-    expect(parseStaffAccount({ ...techInput, role: 'admin' }).error).toMatch(/client or technician/);
+    expect(parseStaffAccount({ ...techInput, role: 'admin' }).error).toMatch(/valid account role/);
   });
 
   it('rejects a technician without a located base', () => {

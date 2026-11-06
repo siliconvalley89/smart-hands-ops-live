@@ -2,6 +2,7 @@ import { doc, setDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import logoPath from '../assets/sv-smart-dispatch-logo.jpg';
 import { loadImageDataUrl, loadImageElement } from './media';
+import { roleLabel } from './roles';
 
 export const renderBadge = async (profile, uid) => {
   {
@@ -56,7 +57,7 @@ export const renderBadge = async (profile, uid) => {
 
     ctx.fillStyle = '#b45309';
     ctx.font = 'bold 32px Arial, sans-serif';
-    const roleText = (profile.role === 'adminAssistant' ? 'Admin Assistant' : profile.role || 'Staff').toUpperCase();
+    const roleText = (roleLabel(profile.role) || 'Staff').toUpperCase();
     ctx.fillText(roleText, W / 2, 577);
 
     ctx.fillStyle = '#475569';

@@ -15,7 +15,7 @@ const Stripe = require('stripe');
 const { checkoutAction, checkoutProblem, checkoutSessionParams, paymentFromCheckoutSession } = require('./stripe');
 const { validateWebsiteIntake } = require('./websiteIntake');
 const { REVERT_FIELDS, getTargetWindowMs, hasTechConflict, needsConflictCheck, toMillisValue } = require('./schedule');
-const { parseStaffAccount } = require('./accounts');
+const { FIELD_ROLES, parseStaffAccount } = require('./accounts');
 const { FREQUENCIES, advanceOccurrence, dueOccurrences } = require('./contracts');
 
 const WEBSITE_INTAKE_LIMIT = 10;
@@ -851,7 +851,7 @@ exports.createStaffAccount = onCall(
         role: account.role,
         mustChangePassword: true,
       });
-      if (account.role === 'tech') {
+      if (FIELD_ROLES.includes(account.role)) {
         batch.set(db.collection('technicians').doc(user.uid), {
           uid: user.uid,
           name: account.name,

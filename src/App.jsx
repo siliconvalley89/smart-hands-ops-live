@@ -39,7 +39,7 @@ import CompletedJobs from './features/CompletedJobs';
 import RequestForm from './features/RequestForm';
 import TodayJobs from './features/TodayJobs';
 import RescheduleRequests from './features/RescheduleRequests';
-import { isFieldRole } from './lib/roles';
+import { isFieldRole, roleLabel } from './lib/roles';
 import { BUSINESS_NAME, APP_DISPLAY_NAME } from './lib/branding';
 import {
   Briefcase,
@@ -326,14 +326,14 @@ function App() {
       setAccountMessage('Please fill all required account fields.');
       return;
     }
-    if (newAccount.role === 'tech' && !newAccount.location) {
-      setAccountMessage('Please enter a base location for technician accounts.');
+    if (isFieldRole(newAccount.role) && !newAccount.location) {
+      setAccountMessage('Please enter a base location for field staff accounts.');
       return;
     }
 
     // Locate the base address first so a failed lookup can't create a technician without coordinates
     let techGeo = null;
-    if (newAccount.role === 'tech') {
+    if (isFieldRole(newAccount.role)) {
       try {
         techGeo = await geocodeAddress(newAccount.location);
       } catch (error) {
@@ -357,7 +357,7 @@ function App() {
           lng: techGeo.lng,
         }),
       });
-      setAccountMessage(`${newAccount.role === 'tech' ? 'Technician' : 'Client'} account created successfully.`);
+      setAccountMessage('Account created successfully.');
       setNewAccount({ name: '', email: '', password: '', role: 'tech', phone: '', location: '' });
     } catch (error) {
       console.error('Create account failed', error);
@@ -990,7 +990,6 @@ function App() {
   const isAdmin = profile?.role === 'admin';
   const isAssistant = profile?.role === 'adminAssistant';
   const canStaffManage = isAdmin || isAssistant;
-  const roleLabel = isAssistant ? 'Admin Assistant' : profile?.role;
   const staffTabs = [
     { key: 'dispatch', label: 'Dispatch' },
     { key: 'map', label: 'Map' },
@@ -1256,7 +1255,7 @@ function App() {
                 </div>
               )}
               <div>
-                <div className="text-3xl font-bold capitalize">{roleLabel}</div>
+                <div className="text-3xl font-bold capitalize">{roleLabel(profile?.role)}</div>
                 <div className="mt-1 text-slate-400 text-sm">{profile.displayName}</div>
               </div>
             </div>

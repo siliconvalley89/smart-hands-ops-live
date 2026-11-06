@@ -1,4 +1,5 @@
 import { Plus } from 'lucide-react';
+import { isFieldRole } from '../lib/roles';
 
 export default function Accounts({
   isAdmin,
@@ -41,7 +42,7 @@ export default function Accounts({
       <div className="flex items-center justify-between gap-4">
         <div>
           <h2 className="text-xl font-semibold text-white">Create user account</h2>
-          <p className="text-slate-400 mt-1">Create a technician or client login directly from the admin panel.</p>
+          <p className="text-slate-400 mt-1">Create a technician, senior consultant, admin assistant, or client login directly from the admin panel.</p>
         </div>
       </div>
 
@@ -70,12 +71,14 @@ export default function Accounts({
           onChange={(e) => setNewAccount((prev) => ({ ...prev, role: e.target.value }))}
           className="w-full rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3 text-slate-100"
         >
-          <option value="tech">Technician</option>
           <option value="client">Client</option>
+          <option value="tech">Technician</option>
+          <option value="seniorConsultant">Senior Consultant</option>
+          <option value="adminAssistant">Admin Assistant</option>
         </select>
       </div>
 
-      {newAccount.role === 'tech' && (
+      {isFieldRole(newAccount.role) && (
         <div className="grid gap-4 md:grid-cols-2">
           <input
             value={newAccount.phone}

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { doc, getDoc } from 'firebase/firestore';
 import { db } from './firebase';
+import { roleLabel } from './lib/roles';
 
 export default function VerifyBadge({ uid }) {
   const [state, setState] = useState({ status: 'loading', badge: null });
@@ -18,7 +19,7 @@ export default function VerifyBadge({ uid }) {
   }, [uid]);
 
   const { status, badge } = state;
-  const role = badge?.role === 'adminAssistant' ? 'Admin Assistant' : badge?.role;
+  const role = roleLabel(badge?.role);
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center p-4">
