@@ -8,6 +8,11 @@ function messagePushTarget(message, job) {
   return { roles: STAFF_AUTHOR_ROLES };
 }
 
+function clientMessageRecipient(message, job) {
+  if (message.authorRole === 'client') return { roles: STAFF_AUTHOR_ROLES };
+  return job.clientEmail ? { email: job.clientEmail } : null;
+}
+
 function messagePushText(message, job) {
   const text = String(message.text || '');
   const preview = text.length > PREVIEW_LENGTH ? `${text.slice(0, PREVIEW_LENGTH - 1)}…` : text;
@@ -17,4 +22,4 @@ function messagePushText(message, job) {
   };
 }
 
-module.exports = { messagePushTarget, messagePushText };
+module.exports = { messagePushTarget, clientMessageRecipient, messagePushText };

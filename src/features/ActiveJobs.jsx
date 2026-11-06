@@ -16,7 +16,7 @@ import PayBalanceButton from './PayBalanceButton';
 import RescheduleRequestForm from './RescheduleRequestForm';
 import JobMessages from './JobMessages';
 import useMessageReads from '../hooks/useMessageReads';
-import { canUseJobThread, hasUnreadMessages } from '../lib/messages';
+import { canUseClientThread, canUseJobThread, hasUnreadClientMessages, hasUnreadMessages } from '../lib/messages';
 
 export default function ActiveJobs({
   profile,
@@ -76,8 +76,12 @@ export default function ActiveJobs({
   handleDelete,
 }) {
   const [now, setNow] = useState(() => Date.now());
-  const messageReads = useMessageReads(canUseJobThread(profile?.role) ? (profile?.uid || profile?.id) : null);
-  const hasUnreadThread = (job) => messageReads.loaded && hasUnreadMessages(job, messageReads.readAtByJob[job.id]);
+  const messageReads = useMessageReads(canUseJobThread(profile?.role) || canUseClientThread(profile?.role) ? (profile?.uid || profile?.id) : null);
+  const myEmail = auth.currentUser?.email;
+  const hasUnreadThread = (job) => messageReads.loaded && (
+    (canUseJobThread(profile?.role) && hasUnreadMessages(job, messageReads.readAtByJob[job.id])) ||
+    (canUseClientThread(profile?.role) && hasUnreadClientMessages(job, messageReads.clientReadAtByJob[job.id], myEmail))
+  );
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 15000);
     return () => clearInterval(timer);
@@ -238,7 +242,7 @@ export default function ActiveJobs({
                 </div>
 
                 <div className="mt-6">
-                  <JobMessages job={job} profile={profile} readAtMs={messageReads.readAtByJob[job.id]} />
+                  <JobMessages job={job} profile={profile} readAtMs={messageReads.readAtByJob[job.id]} clientReadAtMs={messageReads.clientReadAtByJob[job.id]} />
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-6">

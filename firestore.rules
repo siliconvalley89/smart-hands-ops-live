@@ -94,6 +94,13 @@ service cloud.firestore {
           job.get('billingMigrated', false) == true && job.get('invoiceSent', false) != true);
     }
 
+    function canReadClientThread(jobId) {
+      let job = get(/databases/$(database)/documents/jobs/$(jobId)).data;
+      return isAdmin() ||
+        (isAdminAssistant() && job.status != 'Completed' && job.get('billingMigrated', false) == true) ||
+        (isVerifiedClient() && job.clientEmail == request.auth.token.email);
+    }
+
     function canReadJobThread(jobId) {
       let job = get(/databases/$(database)/documents/jobs/$(jobId)).data;
       return isAdmin() ||
@@ -140,6 +147,14 @@ service cloud.firestore {
         (isSignedIn() && request.auth.uid == userId &&
          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['fcmToken', 'fcmTokens', 'mustChangePassword', 'profilePhotoUrl', 'profilePhotoData']));
       allow delete: if isAdmin();
+
+      match /clientMessageReads/{jobId} {
+        allow read: if request.auth.uid == userId;
+        allow create, update: if request.auth.uid == userId && canReadClientThread(jobId) &&
+          request.resource.data.keys().hasOnly(['readAt']) &&
+          request.resource.data.readAt == request.time;
+        allow delete: if false;
+      }
 
       match /messageReads/{jobId} {
         allow read: if request.auth.uid == userId;
@@ -320,6 +335,21 @@ service cloud.firestore {
           request.resource.data.diff(resource.data).affectedKeys().hasOnly(['voided', 'voidReason', 'voidedBy', 'voidedAt']);
         allow delete: if false;
       }
+      match /clientMessages/{messageId} {
+        allow read: if canReadClientThread(jobId);
+        allow create: if canReadClientThread(jobId) &&
+          request.resource.data.keys().hasOnly(['text', 'authorEmail', 'authorName', 'authorRole', 'createdAt']) &&
+          request.resource.data.keys().hasAll(['text', 'authorEmail', 'authorName', 'authorRole', 'createdAt']) &&
+          request.resource.data.text is string &&
+          request.resource.data.text.size() >= 1 && request.resource.data.text.size() <= 2000 &&
+          request.resource.data.authorEmail == request.auth.token.email &&
+          request.resource.data.authorRole == getUserRole() &&
+          getUserRole() in ['client', 'admin', 'adminAssistant'] &&
+          request.resource.data.authorName is string &&
+          request.resource.data.createdAt == request.time;
+        allow update, delete: if false;
+      }
+
       match /messages/{messageId} {
         allow read: if canReadJobThread(jobId);
         allow create: if canReadJobThread(jobId) &&

@@ -3,13 +3,19 @@ import { useCallback, useEffect, useState } from 'react';
 import { auth, db } from '../firebase';
 import { cleanMessageText } from '../lib/messages';
 
-export default function useJobMessages(jobId, profile, enabled) {
+const CHANNELS = {
+  team: { messages: 'messages', reads: 'messageReads' },
+  client: { messages: 'clientMessages', reads: 'clientMessageReads' },
+};
+
+export default function useJobMessages(jobId, profile, enabled, channel = 'team') {
   const [messages, setMessages] = useState([]);
   const [loadError, setLoadError] = useState('');
+  const { messages: messagesCollection, reads: readsCollection } = CHANNELS[channel];
 
   useEffect(() => {
     if (!enabled) return () => {};
-    const messagesQuery = query(collection(db, 'jobs', jobId, 'messages'), orderBy('createdAt', 'asc'), limitToLast(100));
+    const messagesQuery = query(collection(db, 'jobs', jobId, messagesCollection), orderBy('createdAt', 'asc'), limitToLast(100));
     return onSnapshot(
       messagesQuery,
       (snapshot) => {
@@ -22,19 +28,19 @@ export default function useJobMessages(jobId, profile, enabled) {
         setLoadError('Unable to load messages for this job.');
       },
     );
-  }, [enabled, jobId]);
+  }, [enabled, jobId, messagesCollection]);
 
   const markRead = useCallback(() => {
     const uid = auth.currentUser?.uid;
     if (!uid) return Promise.resolve();
-    return setDoc(doc(db, 'users', uid, 'messageReads', jobId), { readAt: serverTimestamp() });
-  }, [jobId]);
+    return setDoc(doc(db, 'users', uid, readsCollection, jobId), { readAt: serverTimestamp() });
+  }, [jobId, readsCollection]);
 
   const send = useCallback(async (rawText) => {
     const text = cleanMessageText(rawText);
     if (!text) return false;
     const user = auth.currentUser;
-    await addDoc(collection(db, 'jobs', jobId, 'messages'), {
+    await addDoc(collection(db, 'jobs', jobId, messagesCollection), {
       text,
       authorEmail: user.email,
       authorName: profile?.displayName || user.email,
@@ -42,7 +48,7 @@ export default function useJobMessages(jobId, profile, enabled) {
       createdAt: serverTimestamp(),
     });
     return true;
-  }, [jobId, profile]);
+  }, [jobId, messagesCollection, profile]);
 
   return { messages, loadError, send, markRead };
 }

@@ -955,6 +955,46 @@ describe('job message threads', () => {
   });
 });
 
+describe('client job chat', () => {
+  const chat = (ctx, jobId = 'job-open') => collection(ctx, `jobs/${jobId}/clientMessages`);
+  const newChat = (overrides = {}) => ({
+    text: 'When will the technician arrive?', authorEmail: CLIENT, authorName: 'Acme', authorRole: 'client',
+    createdAt: serverTimestamp(), ...overrides,
+  });
+
+  it('the customer and office staff read and post on the client thread', async () => {
+    await assertSucceeds(getDocs(chat(as.client())));
+    await assertSucceeds(addDoc(chat(as.client()), newChat()));
+    await assertSucceeds(getDocs(chat(as.admin())));
+    await assertSucceeds(addDoc(chat(as.admin()), newChat({ authorEmail: ADMIN, authorName: 'Ada', authorRole: 'admin' })));
+    await assertSucceeds(addDoc(chat(as.assistant()), newChat({ authorEmail: ASSISTANT, authorName: 'Ari', authorRole: 'adminAssistant' })));
+  });
+
+  it('other customers, technicians, and anonymous users cannot read or post on the client thread', async () => {
+    await assertFails(getDocs(chat(as.otherClient())));
+    await assertFails(addDoc(chat(as.otherClient()), newChat({ authorEmail: OTHER_CLIENT })));
+    await assertFails(getDocs(chat(as.tech())));
+    await assertFails(addDoc(chat(as.tech()), newChat({ authorEmail: TECH, authorRole: 'tech' })));
+    await assertFails(getDocs(chat(as.anon())));
+  });
+
+  it('admin assistant cannot use the client thread on a completed job', async () => {
+    await assertFails(getDocs(chat(as.assistant(), 'job-done')));
+  });
+
+  it('a post must come from the signed-in author in their own role', async () => {
+    await assertFails(addDoc(chat(as.client()), newChat({ authorRole: 'admin' })));
+    await assertFails(addDoc(chat(as.client()), newChat({ authorEmail: ADMIN })));
+  });
+
+  it('a customer records a read marker for their own job only', async () => {
+    await assertSucceeds(setDoc(doc(as.client(), 'users/client-uid/clientMessageReads/job-open'), { readAt: serverTimestamp() }));
+    await assertFails(setDoc(doc(as.client(), 'users/client-uid/clientMessageReads/job-missing'), { readAt: serverTimestamp() }));
+    await assertFails(setDoc(doc(as.client(), 'users/client-uid/clientMessageReads/job-open'), { readAt: new Date() }));
+    await assertFails(setDoc(doc(as.otherClient(), 'users/client-uid/clientMessageReads/job-open'), { readAt: serverTimestamp() }));
+  });
+});
+
 describe('sms consent records from the request form', () => {
   const CONSENT_TEXT = 'By checking this box, you agree to receive customer care SMS messages from Silicon Valley Smart Hands LLC at the phone number provided, including scheduling, job status, and notices of new chat messages about your service. Consent is not a condition of purchase. Msg & data rates may apply. Message frequency varies. Reply HELP for help or STOP to opt out.';
   const newConsent = (overrides = {}) => ({

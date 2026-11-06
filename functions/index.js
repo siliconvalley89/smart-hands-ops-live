@@ -17,7 +17,7 @@ const { validateWebsiteIntake } = require('./websiteIntake');
 const { REVERT_FIELDS, getTargetWindowMs, hasTechConflict, needsConflictCheck, toMillisValue } = require('./schedule');
 const { FIELD_ROLES, parseStaffAccount } = require('./accounts');
 const { FREQUENCIES, advanceOccurrence, dueOccurrences } = require('./contracts');
-const { messagePushTarget, messagePushText } = require('./messages');
+const { messagePushTarget, clientMessageRecipient, messagePushText } = require('./messages');
 
 const WEBSITE_INTAKE_LIMIT = 10;
 const WEBSITE_INTAKE_GLOBAL_LIMIT = 50;
@@ -411,6 +411,30 @@ exports.notifyAdminsOnFileAdded = onDocumentCreated('jobs/{jobId}/files/{fileId}
   await notifyAdmins(jobId, { title: 'File uploaded', body: `${who} added a file at ${site}`, tag: `files-${jobId}` });
   return null;
 });
+
+exports.notifyOnClientMessageCreated = onDocumentCreated(
+  { document: 'jobs/{jobId}/clientMessages/{messageId}' },
+  async (event) => {
+    const jobId = event.params.jobId;
+    const message = event.data.data();
+    const db = getFirestore();
+    const jobRef = db.collection('jobs').doc(jobId);
+    const jobSnap = await jobRef.get();
+    if (!jobSnap.exists) return null;
+    const job = jobSnap.data();
+
+    await jobRef.update({ lastClientMessageAt: message.createdAt || FieldValue.serverTimestamp(), lastClientMessageBy: message.authorEmail || null });
+
+    const recipient = clientMessageRecipient(message, job);
+    if (!recipient) return null;
+    const query = recipient.email
+      ? db.collection('users').where('email', '==', recipient.email).limit(1)
+      : db.collection('users').where('role', 'in', recipient.roles);
+    const targets = await getPushTargets(query);
+    await sendJobPush(targets, jobId, { ...messagePushText(message, job), tag: `client-message-${jobId}` });
+    return null;
+  },
+);
 
 exports.notifyOnJobMessageCreated = onDocumentCreated('jobs/{jobId}/messages/{messageId}', async (event) => {
   const jobId = event.params.jobId;
@@ -1278,7 +1302,7 @@ exports.syncRoleClaim = onDocumentWritten('users/{uid}', async (event) => {
 // Called by your business website's contact/service form.
 // Replace the cors origin with your website's actual domain for tighter security.
 // ── Audit log: job changes and payment events, written server-side and readable by admins only ──
-const AUDIT_IGNORED_JOB_FIELDS = ['updatedAt', 'updatedBy', 'photoCounts', 'lastMessageAt', 'lastMessageBy'];
+const AUDIT_IGNORED_JOB_FIELDS = ['updatedAt', 'updatedBy', 'photoCounts', 'lastMessageAt', 'lastMessageBy', 'lastClientMessageAt', 'lastClientMessageBy'];
 const AUDIT_DETAIL_FIELDS = ['client', 'task', 'status', 'scheduledFor'];
 
 function auditValue(value) {

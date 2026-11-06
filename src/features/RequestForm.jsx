@@ -119,7 +119,12 @@ export default function RequestForm({
               onChange={(e) => setRequestForm((prev) => ({ ...prev, smsConsent: e.target.checked }))}
               className="mt-1"
             />
-            <span>{SMS_CONSENT_DISCLOSURE}</span>
+            <span>
+              {SMS_CONSENT_DISCLOSURE} Review our{' '}
+              <a href="https://www.siliconvalleysmarthands.com/terms.html" target="_blank" rel="noopener noreferrer" className="text-teal-300 underline">SMS Terms</a>
+              {' '}and{' '}
+              <a href="https://www.siliconvalleysmarthands.com/privacy-policy.html" target="_blank" rel="noopener noreferrer" className="text-teal-300 underline">Privacy Policy</a>.
+            </span>
           </label>
         ) : (
           <p className="text-slate-500 text-xs">Clients tick the SMS opt-in themselves when they submit their own requests.</p>

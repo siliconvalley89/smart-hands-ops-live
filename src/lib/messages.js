@@ -4,6 +4,7 @@ import { toMillis } from './jobTime';
 export const MAX_MESSAGE_LENGTH = 2000;
 
 export const canUseJobThread = (role) => role === 'admin' || role === 'adminAssistant' || isFieldRole(role);
+export const canUseClientThread = (role) => role === 'client' || role === 'admin' || role === 'adminAssistant';
 
 export const cleanMessageText = (input) => {
   const text = typeof input === 'string' ? input.trim() : '';
@@ -11,8 +12,13 @@ export const cleanMessageText = (input) => {
   return text;
 };
 
-export const hasUnreadMessages = (job, readAtMs) => {
-  const lastMessageMs = toMillis(job?.lastMessageAt);
-  if (lastMessageMs == null) return false;
-  return readAtMs == null || lastMessageMs > readAtMs;
+const hasUnreadSince = (lastAt, readAtMs) => {
+  const lastMs = toMillis(lastAt);
+  if (lastMs == null) return false;
+  return readAtMs == null || lastMs > readAtMs;
 };
+
+export const hasUnreadMessages = (job, readAtMs) => hasUnreadSince(job?.lastMessageAt, readAtMs);
+
+export const hasUnreadClientMessages = (job, readAtMs, myEmail) =>
+  job?.lastClientMessageBy !== myEmail && hasUnreadSince(job?.lastClientMessageAt, readAtMs);
