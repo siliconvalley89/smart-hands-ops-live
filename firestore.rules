@@ -94,6 +94,13 @@ service cloud.firestore {
           job.get('billingMigrated', false) == true && job.get('invoiceSent', false) != true);
     }
 
+    function canReadJobThread(jobId) {
+      let job = get(/databases/$(database)/documents/jobs/$(jobId)).data;
+      return isAdmin() ||
+        (isAdminAssistant() && job.status != 'Completed' && job.get('billingMigrated', false) == true) ||
+        (isVerifiedTech() && job.assignedTechEmail == request.auth.token.email && job.get('billingMigrated', false) == true);
+    }
+
     function photoWindowOpen(job, hours) {
       return job.get('checkOutAt', null) == null ||
         request.time < job.get('checkOutAt', null) + duration.value(hours, 'h');
@@ -133,6 +140,14 @@ service cloud.firestore {
         (isSignedIn() && request.auth.uid == userId &&
          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['fcmToken', 'fcmTokens', 'mustChangePassword', 'profilePhotoUrl', 'profilePhotoData']));
       allow delete: if isAdmin();
+
+      match /messageReads/{jobId} {
+        allow read: if request.auth.uid == userId;
+        allow create, update: if request.auth.uid == userId && canReadJobThread(jobId) &&
+          request.resource.data.keys().hasOnly(['readAt']) &&
+          request.resource.data.readAt == request.time;
+        allow delete: if false;
+      }
     }
 
     match /technicians/{techId} {
@@ -304,6 +319,19 @@ service cloud.firestore {
           request.resource.data.voided == true &&
           request.resource.data.diff(resource.data).affectedKeys().hasOnly(['voided', 'voidReason', 'voidedBy', 'voidedAt']);
         allow delete: if false;
+      }
+      match /messages/{messageId} {
+        allow read: if canReadJobThread(jobId);
+        allow create: if canReadJobThread(jobId) &&
+          request.resource.data.keys().hasOnly(['text', 'authorEmail', 'authorName', 'authorRole', 'createdAt']) &&
+          request.resource.data.keys().hasAll(['text', 'authorEmail', 'authorName', 'authorRole', 'createdAt']) &&
+          request.resource.data.text is string &&
+          request.resource.data.text.size() >= 1 && request.resource.data.text.size() <= 2000 &&
+          request.resource.data.authorEmail == request.auth.token.email &&
+          request.resource.data.authorRole == getUserRole() &&
+          request.resource.data.authorName is string &&
+          request.resource.data.createdAt == request.time;
+        allow update, delete: if false;
       }
     }
 

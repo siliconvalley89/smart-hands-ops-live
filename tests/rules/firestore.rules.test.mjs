@@ -2,6 +2,7 @@ import { after, before, beforeEach, describe, it } from 'node:test';
 import { readFileSync } from 'node:fs';
 import { assertFails, assertSucceeds, initializeTestEnvironment } from '@firebase/rules-unit-testing';
 import {
+  addDoc,
   collection,
   collectionGroup,
   doc,
@@ -9,6 +10,7 @@ import {
   getDocs,
   query,
   setDoc,
+  serverTimestamp,
   updateDoc,
   deleteDoc,
   where,
@@ -20,6 +22,7 @@ const TECH = 'tech@test.dev';
 const SENIOR = 'senior@test.dev';
 const CLIENT = 'client@test.dev';
 const OTHER_CLIENT = 'other-client@test.dev';
+const OTHER_TECH = 'other-tech@test.dev';
 
 const SEED = [
   ['users/admin-uid', { uid: 'admin-uid', email: ADMIN, role: 'admin' }],
@@ -36,6 +39,14 @@ const SEED = [
   ['jobs/job-done', {
     client: 'Acme', clientEmail: CLIENT, assignedTechEmail: TECH, status: 'Completed',
     billingMigrated: true, invoiceSent: true, clientSignedOff: true,
+  }],
+  ['jobs/job-legacy', {
+    client: 'Acme', clientEmail: CLIENT, assignedTechEmail: TECH, status: 'Assigned',
+    billingMigrated: false, invoiceSent: false, clientSignedOff: false,
+  }],
+  ['jobs/job-senior', {
+    client: 'Acme', clientEmail: CLIENT, assignedTechEmail: SENIOR, status: 'Assigned',
+    billingMigrated: true, invoiceSent: false, clientSignedOff: false,
   }],
   ['jobs/job-invoiced', {
     client: 'Acme', clientEmail: CLIENT, assignedTechEmail: TECH, status: 'Assigned',
@@ -112,6 +123,7 @@ const as = {
   admin: () => verified('admin-uid', 'admin', ADMIN),
   assistant: () => verified('assistant-uid', 'adminAssistant', ASSISTANT),
   tech: () => verified('tech-uid', 'tech', TECH),
+  otherTech: () => verified('other-tech-uid', 'tech', OTHER_TECH),
   unverifiedTech: () => unverified('tech-uid', 'tech', TECH),
   senior: () => verified('senior-uid', 'seniorConsultant', SENIOR),
   client: () => verified('client-uid', 'client', CLIENT),
@@ -864,5 +876,81 @@ describe('tech checkout and sign-off gates', () => {
   it('tech cannot request sign-off without a check-in', async () => {
     await seedOnsite({});
     await assertFails(techUpdate({ status: 'Ready for Signoff', signoffRequestedAt: new Date() }));
+  });
+});
+
+describe('job message threads', () => {
+  const newMessage = (overrides = {}) => ({
+    text: 'Parking is at the loading dock', authorEmail: TECH, authorName: 'Tia', authorRole: 'tech',
+    createdAt: serverTimestamp(), ...overrides,
+  });
+  const thread = (ctx, jobId = 'job-open') => collection(ctx, `jobs/${jobId}/messages`);
+
+  it('admin and admin assistant read and post on an open migrated job', async () => {
+    await assertSucceeds(getDocs(thread(as.admin())));
+    await assertSucceeds(getDocs(thread(as.assistant())));
+    await assertSucceeds(addDoc(thread(as.admin()), newMessage({ authorEmail: ADMIN, authorName: 'Ada', authorRole: 'admin' })));
+    await assertSucceeds(addDoc(thread(as.assistant()), newMessage({ authorEmail: ASSISTANT, authorName: 'Ari', authorRole: 'adminAssistant' })));
+  });
+
+  it('admin assistant cannot read a completed job thread, matching the job itself', async () => {
+    await assertFails(getDocs(thread(as.assistant(), 'job-done')));
+  });
+
+  it('assigned tech reads and posts on a migrated job', async () => {
+    await assertSucceeds(getDocs(thread(as.tech())));
+    await assertSucceeds(addDoc(thread(as.tech()), newMessage()));
+  });
+
+  it('assigned senior consultant reads and posts', async () => {
+    await assertSucceeds(addDoc(thread(as.senior(), 'job-senior'), newMessage({ authorEmail: SENIOR, authorName: 'Sam', authorRole: 'seniorConsultant' })));
+  });
+
+  it('tech cannot read or post on a job that is not migrated, or on another tech\'s job', async () => {
+    await assertFails(getDocs(thread(as.tech(), 'job-legacy')));
+    await assertFails(addDoc(thread(as.tech(), 'job-legacy'), newMessage()));
+    await assertFails(getDocs(thread(as.otherTech())));
+    await assertFails(addDoc(thread(as.otherTech()), newMessage({ authorEmail: OTHER_TECH })));
+  });
+
+  it('clients and anonymous users cannot read or post', async () => {
+    await assertFails(getDocs(thread(as.client())));
+    await assertFails(getDocs(thread(as.anon())));
+    await assertFails(addDoc(thread(as.client()), newMessage({ authorEmail: CLIENT, authorRole: 'client' })));
+  });
+
+  it('a post must match the signed-in author and role', async () => {
+    await assertFails(addDoc(thread(as.tech()), newMessage({ authorEmail: ADMIN })));
+    await assertFails(addDoc(thread(as.tech()), newMessage({ authorRole: 'admin' })));
+  });
+
+  it('a post must have text of 1 to 2000 characters and only the allowed fields', async () => {
+    await assertFails(addDoc(thread(as.tech()), newMessage({ text: '' })));
+    await assertFails(addDoc(thread(as.tech()), newMessage({ text: 'x'.repeat(2001) })));
+    await assertSucceeds(addDoc(thread(as.tech()), newMessage({ text: 'x'.repeat(2000) })));
+    await assertFails(addDoc(thread(as.tech()), newMessage({ extra: true })));
+  });
+
+  it('a post must use the server time, not a client timestamp', async () => {
+    await assertFails(addDoc(thread(as.tech()), newMessage({ createdAt: new Date(Date.now() - 60 * 1000) })));
+  });
+
+  it('messages cannot be edited or deleted', async () => {
+    await assertSucceeds(setDoc(doc(as.admin(), 'jobs/job-open/messages/m-edit'), newMessage({ authorEmail: ADMIN, authorRole: 'admin' })));
+    await assertFails(updateDoc(doc(as.admin(), 'jobs/job-open/messages/m-edit'), { text: 'changed' }));
+    await assertFails(deleteDoc(doc(as.admin(), 'jobs/job-open/messages/m-edit')));
+  });
+
+  it('a user records their own read marker only for a thread they can read', async () => {
+    await assertSucceeds(setDoc(doc(as.tech(), 'users/tech-uid/messageReads/job-open'), { readAt: serverTimestamp() }));
+    await assertFails(setDoc(doc(as.tech(), 'users/tech-uid/messageReads/job-legacy'), { readAt: serverTimestamp() }));
+    await assertFails(setDoc(doc(as.tech(), 'users/tech-uid/messageReads/job-open'), { readAt: serverTimestamp(), extra: 1 }));
+    await assertFails(setDoc(doc(as.tech(), 'users/tech-uid/messageReads/job-open'), { readAt: new Date() }));
+  });
+
+  it('read markers are private to their owner', async () => {
+    await assertSucceeds(setDoc(doc(as.tech(), 'users/tech-uid/messageReads/job-open'), { readAt: serverTimestamp() }));
+    await assertFails(getDoc(doc(as.otherTech(), 'users/tech-uid/messageReads/job-open')));
+    await assertFails(setDoc(doc(as.otherTech(), 'users/tech-uid/messageReads/job-open'), { readAt: serverTimestamp() }));
   });
 });

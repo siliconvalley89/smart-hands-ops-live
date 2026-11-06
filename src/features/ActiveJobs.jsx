@@ -14,6 +14,9 @@ import TechNameWithPhoto from './TechNameWithPhoto';
 import JobMedia from './JobMedia';
 import PayBalanceButton from './PayBalanceButton';
 import RescheduleRequestForm from './RescheduleRequestForm';
+import JobMessages from './JobMessages';
+import useMessageReads from '../hooks/useMessageReads';
+import { canUseJobThread, hasUnreadMessages } from '../lib/messages';
 
 export default function ActiveJobs({
   profile,
@@ -73,6 +76,8 @@ export default function ActiveJobs({
   handleDelete,
 }) {
   const [now, setNow] = useState(() => Date.now());
+  const messageReads = useMessageReads(canUseJobThread(profile?.role) ? (profile?.uid || profile?.id) : null);
+  const hasUnreadThread = (job) => messageReads.loaded && hasUnreadMessages(job, messageReads.readAtByJob[job.id]);
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 15000);
     return () => clearInterval(timer);
@@ -154,6 +159,7 @@ export default function ActiveJobs({
                   </span>
                   {sla && <span className={`inline-flex rounded-full px-3 py-1 text-xs ${sla.breached ? 'bg-rose-500/10 text-rose-300' : 'bg-amber-500/10 text-amber-300'}`}>{formatSlaLabel(sla)}</span>}
                   <span className="font-semibold text-white">{job.client}</span>
+                  {hasUnreadThread(job) && <span className="inline-flex h-2.5 w-2.5 rounded-full bg-teal-400" title="New job messages" />}
                   <span className="text-slate-300 text-sm truncate max-w-xs">{job.task}</span>
                   <span className="text-slate-400 text-sm">{job.assignedTechName || 'Unassigned'}</span>
                   {job.scheduledFor && <span className="text-amber-300 text-sm">{formatSchedule(job)}</span>}
@@ -229,6 +235,10 @@ export default function ActiveJobs({
                     <div className="text-slate-400 text-sm mt-3">Created</div>
                     <div className="text-slate-200 text-sm">{formatDate(job.createdAt)}</div>
                   </div>
+                </div>
+
+                <div className="mt-6">
+                  <JobMessages job={job} profile={profile} readAtMs={messageReads.readAtByJob[job.id]} />
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-6">
