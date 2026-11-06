@@ -959,25 +959,30 @@ describe('sms consent records from the request form', () => {
   const CONSENT_TEXT = 'By checking this box, you agree to receive customer care SMS messages from Silicon Valley Smart Hands LLC at the phone number provided, including scheduling, job status, and notices of new chat messages about your service. Consent is not a condition of purchase. Msg & data rates may apply. Message frequency varies. Reply HELP for help or STOP to opt out.';
   const newConsent = (overrides = {}) => ({
     phone: '(408) 555-0100', smsConsent: true, version: 'v1.2', disclosure: CONSENT_TEXT,
-    consentedAt: serverTimestamp(), recordedBy: ASSISTANT, source: 'ops-request-form', ...overrides,
+    consentedAt: serverTimestamp(), recordedBy: CLIENT, source: 'ops-request-form', ...overrides,
   });
 
-  it('a signed-in staff member records a consent with the exact disclosure', async () => {
-    await assertSucceeds(addDoc(collection(as.assistant(), 'smsConsents'), newConsent()));
+  it('a client records their own consent with the exact disclosure', async () => {
+    await assertSucceeds(addDoc(collection(as.client(), 'smsConsents'), newConsent()));
+  });
+
+  it('staff cannot record consent on a client\'s behalf', async () => {
+    await assertFails(addDoc(collection(as.assistant(), 'smsConsents'), newConsent({ recordedBy: ASSISTANT })));
+    await assertFails(addDoc(collection(as.admin(), 'smsConsents'), newConsent({ recordedBy: ADMIN })));
   });
 
   it('a consent must match the current version, disclosure, author, and server time', async () => {
-    await assertFails(addDoc(collection(as.assistant(), 'smsConsents'), newConsent({ version: 'v1.1' })));
-    await assertFails(addDoc(collection(as.assistant(), 'smsConsents'), newConsent({ disclosure: 'Yes' })));
-    await assertFails(addDoc(collection(as.assistant(), 'smsConsents'), newConsent({ recordedBy: ADMIN })));
-    await assertFails(addDoc(collection(as.assistant(), 'smsConsents'), newConsent({ consentedAt: new Date(Date.now() - 60 * 1000) })));
-    await assertFails(addDoc(collection(as.assistant(), 'smsConsents'), newConsent({ smsConsent: false })));
+    await assertFails(addDoc(collection(as.client(), 'smsConsents'), newConsent({ version: 'v1.1' })));
+    await assertFails(addDoc(collection(as.client(), 'smsConsents'), newConsent({ disclosure: 'Yes' })));
+    await assertFails(addDoc(collection(as.client(), 'smsConsents'), newConsent({ recordedBy: ADMIN })));
+    await assertFails(addDoc(collection(as.client(), 'smsConsents'), newConsent({ consentedAt: new Date(Date.now() - 60 * 1000) })));
+    await assertFails(addDoc(collection(as.client(), 'smsConsents'), newConsent({ smsConsent: false })));
   });
 
   it('only admins read consent records; nobody edits them', async () => {
-    await assertSucceeds(addDoc(collection(as.assistant(), 'smsConsents'), newConsent()));
+    await assertSucceeds(addDoc(collection(as.client(), 'smsConsents'), newConsent()));
     await assertSucceeds(getDocs(collection(as.admin(), 'smsConsents')));
-    await assertFails(getDocs(collection(as.assistant(), 'smsConsents')));
+    await assertFails(getDocs(collection(as.client(), 'smsConsents')));
     await assertFails(addDoc(collection(as.anon(), 'smsConsents'), newConsent({ recordedBy: 'nobody@test.dev' })));
   });
 });

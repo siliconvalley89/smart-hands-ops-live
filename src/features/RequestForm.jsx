@@ -111,17 +111,19 @@ export default function RequestForm({
             />
           </label>
         </div>
-        <label className="flex items-start gap-3 text-sm text-slate-300">
-          <input
-            type="checkbox"
-            checked={requestForm.smsConsent}
-            onChange={(e) => setRequestForm((prev) => ({ ...prev, smsConsent: e.target.checked }))}
-            className="mt-1"
-          />
-          <span>
-            {SMS_CONSENT_DISCLOSURE} <span className="text-slate-500 text-xs">Tick only after the client agrees to receive texts.</span>
-          </span>
-        </label>
+        {profile.role === 'client' ? (
+          <label className="flex items-start gap-3 text-sm text-slate-300">
+            <input
+              type="checkbox"
+              checked={requestForm.smsConsent}
+              onChange={(e) => setRequestForm((prev) => ({ ...prev, smsConsent: e.target.checked }))}
+              className="mt-1"
+            />
+            <span>{SMS_CONSENT_DISCLOSURE}</span>
+          </label>
+        ) : (
+          <p className="text-slate-500 text-xs">Clients tick the SMS opt-in themselves when they submit their own requests.</p>
+        )}
         {requestError && <div className="rounded-2xl bg-red-900/50 p-3 text-red-200">{requestError}</div>}
         {requestSuccess && <div className="rounded-2xl bg-emerald-900/50 p-3 text-emerald-200">{requestSuccess}</div>}
         <button type="submit" className="rounded-2xl bg-teal-600 px-5 py-3 text-white font-semibold hover:bg-teal-500 transition">

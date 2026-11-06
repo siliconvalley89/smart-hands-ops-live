@@ -304,7 +304,7 @@ function App() {
         createdAt: new Date(),
         updatedBy: firebaseUser?.email,
       });
-      if (requestForm.smsConsent) {
+      if (profile?.role === 'client' && requestForm.smsConsent) {
         batch.set(doc(collection(db, 'smsConsents')), smsConsentRecord(requestForm.phone, firebaseUser?.email));
       }
       await batch.commit();

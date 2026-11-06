@@ -463,6 +463,7 @@ service cloud.firestore {
         request.resource.data.version == 'v1.2' &&
         request.resource.data.disclosure == 'By checking this box, you agree to receive customer care SMS messages from Silicon Valley Smart Hands LLC at the phone number provided, including scheduling, job status, and notices of new chat messages about your service. Consent is not a condition of purchase. Msg & data rates may apply. Message frequency varies. Reply HELP for help or STOP to opt out.' &&
         request.resource.data.consentedAt == request.time &&
+        request.auth.token.role == 'client' &&
         request.resource.data.recordedBy == request.auth.token.email &&
         request.resource.data.source == 'ops-request-form';
       allow update, delete: if false;
