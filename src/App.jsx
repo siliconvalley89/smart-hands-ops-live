@@ -73,15 +73,15 @@ const LazyFallback = <p className="text-sm text-slate-400">Loading…</p>;
 const legalContent = {
   terms: {
     title: 'Terms and Conditions',
-    body: 'Use of SV Smart Aide is subject to these terms. You agree to provide accurate request and account information, keep your login credentials secure, and use the service only for lawful business purposes. Service availability, scheduling, pricing, and job completion are subject to confirmation by Silicon Valley Smart Hands LLC.',
+    body: 'Use of SV Smart Aide is subject to these terms. You agree to provide accurate request and account information, keep your login credentials secure, and use the service only for lawful business purposes. Job chat messages are for coordinating the work on your request only, so do not use them to report an emergency; call the phone number on file instead. Service availability, scheduling, pricing, and job completion are subject to confirmation by Silicon Valley Smart Hands LLC.',
   },
   sms: {
     title: 'SMS Consent',
-    body: 'By providing your phone number and submitting a service request, you consent to receive service-related text messages from Silicon Valley Smart Hands LLC, including scheduling updates, technician arrival notices, and job status messages. Message frequency varies. Message and data rates may apply. Reply STOP to opt out or HELP for help. Consent is not a condition of purchase, and you can withdraw it at any time.',
+    body: 'By providing your phone number and submitting a service request, you consent to receive service-related text messages from Silicon Valley Smart Hands LLC, including scheduling updates, technician arrival notices, job status messages, and notices of new chat messages about your service. Message frequency varies. Message and data rates may apply. Reply STOP to opt out or HELP for help. Consent is not a condition of purchase, and you can withdraw it at any time.',
   },
   privacy: {
     title: 'Privacy Policy',
-    body: 'We collect the information needed to manage service requests, accounts, scheduling, payments, and communications. We use it to provide and improve our services, protect accounts, and communicate about requested work. We do not sell personal information. We may share information with service providers when needed to operate the service or comply with the law. Contact Silicon Valley Smart Hands LLC with privacy questions or requests.',
+    body: 'We collect the information needed to manage service requests, accounts, scheduling, payments, communications, and job chat messages between our staff and the technicians assigned to your job. We use it to provide and improve our services, protect accounts, and communicate about requested work. Chat messages are kept with the job record and shared only with the staff and technicians working on that job and the service providers that run our systems. We do not sell personal information or chat messages. Contact Silicon Valley Smart Hands LLC with privacy questions or requests.',
   },
 };
 
