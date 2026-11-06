@@ -292,7 +292,7 @@ async function sendJobPush(targets, jobId, { title, body, tag }) {
 }
 
 async function notifyAdmins(jobId, alert) {
-  const targets = await getPushTargets(getFirestore().collection('users').where('role', '==', 'admin'));
+  const targets = await getPushTargets(getFirestore().collection('users').where('role', 'in', ['admin', 'adminAssistant']));
   await sendJobPush(targets, jobId, alert);
 }
 

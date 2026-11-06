@@ -51,7 +51,7 @@ export default function useAuthProfile(setAppError) {
   // Register this device's FCM push token whenever a tech or admin logs in
   useEffect(() => {
     if (!firebaseUser || !profile) return;
-    if (!isFieldRole(profile.role) && profile.role !== 'admin') return;
+    if (!isFieldRole(profile.role) && profile.role !== 'admin' && profile.role !== 'adminAssistant') return;
     if (!VAPID_KEY || VAPID_KEY === 'PASTE_YOUR_VAPID_KEY_HERE') return;
 
     const registerFcmToken = async () => {
