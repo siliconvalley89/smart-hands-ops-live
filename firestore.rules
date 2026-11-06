@@ -452,6 +452,22 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
+    match /smsConsents/{consentId} {
+      allow read: if isAdmin();
+      allow create: if isSignedIn() &&
+        request.resource.data.keys().hasOnly(['phone', 'smsConsent', 'version', 'disclosure', 'consentedAt', 'recordedBy', 'source']) &&
+        request.resource.data.keys().hasAll(['phone', 'smsConsent', 'version', 'disclosure', 'consentedAt', 'recordedBy', 'source']) &&
+        request.resource.data.phone is string &&
+        request.resource.data.phone.size() >= 7 && request.resource.data.phone.size() <= 40 &&
+        request.resource.data.smsConsent == true &&
+        request.resource.data.version == 'v1.2' &&
+        request.resource.data.disclosure == 'By checking this box, you agree to receive customer care SMS messages from Silicon Valley Smart Hands LLC at the phone number provided, including scheduling, job status, and notices of new chat messages about your service. Consent is not a condition of purchase. Msg & data rates may apply. Message frequency varies. Reply HELP for help or STOP to opt out.' &&
+        request.resource.data.consentedAt == request.time &&
+        request.resource.data.recordedBy == request.auth.token.email &&
+        request.resource.data.source == 'ops-request-form';
+      allow update, delete: if false;
+    }
+
     match /systemMetadata/{documentId} {
       allow read: if isAdmin();
       allow write: if false;

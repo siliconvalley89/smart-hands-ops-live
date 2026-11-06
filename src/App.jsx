@@ -1,7 +1,7 @@
 import React, { useState, useEffect, lazy, Suspense } from 'react';
 import { db, storage, auth, functions } from './firebase';
 import { httpsCallable } from 'firebase/functions';
-import { collection, addDoc, deleteDoc, doc, updateDoc, setDoc, writeBatch, getDoc } from 'firebase/firestore';
+import { collection, deleteDoc, doc, updateDoc, setDoc, writeBatch, getDoc } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import {
   signInWithEmailAndPassword,
@@ -17,6 +17,7 @@ import { isJobDispatched, isJobAssigned, isJobMovable, findTechConflict, conflic
 import { addPacificDays, formatPacific, pacificDayOf, pacificInputToMillis, pacificMinuteMs } from './lib/pacificTime';
 import { calculateDistanceMiles } from './lib/geo';
 import { geocodeAddress } from './lib/geocode';
+import { smsConsentRecord } from './lib/smsConsent';
 import { MAX_ATTACHMENT_BYTES, ATTACHMENT_ACCEPT, PHOTO_MAX_DIMENSION, PHOTO_JPEG_QUALITY, downloadPhotoFile, fileToSquareDataUrl, compressPhotoForUpload } from './lib/media';
 import { prepareBadge, generateBadgePdf } from './lib/badge';
 import { uploadInvoicePdf } from './lib/invoice';
@@ -77,7 +78,7 @@ const legalContent = {
   },
   sms: {
     title: 'SMS Consent',
-    body: 'By providing your phone number and submitting a service request, you consent to receive service-related text messages from Silicon Valley Smart Hands LLC, including scheduling updates, technician arrival notices, job status messages, and notices of new chat messages about your service. Message frequency varies. Message and data rates may apply. Reply STOP to opt out or HELP for help. Consent is not a condition of purchase, and you can withdraw it at any time.',
+    body: 'By checking the SMS consent box on a service request, you agree to receive service-related text messages from Silicon Valley Smart Hands LLC, including scheduling updates, technician arrival notices, job status messages, and notices of new chat messages about your service. Message frequency varies. Message and data rates may apply. Reply STOP to opt out or HELP for help. Consent is not a condition of purchase, and you can withdraw it at any time.',
   },
   privacy: {
     title: 'Privacy Policy',
@@ -136,7 +137,7 @@ function App() {
   };
   const [uploadingId, setUploadingId] = useState(null);
   const [uploadingFilesId, setUploadingFilesId] = useState(null);
-  const [requestForm, setRequestForm] = useState({ name: '', email: '', phone: '', location: '', service: '', details: '', serialNumber: '', scheduledFor: '', scheduledEndTime: '' });
+  const [requestForm, setRequestForm] = useState({ name: '', email: '', phone: '', location: '', service: '', details: '', serialNumber: '', scheduledFor: '', scheduledEndTime: '', smsConsent: false });
   const [requestSuccess, setRequestSuccess] = useState('');
   const [requestError, setRequestError] = useState('');
   const [newConsumable, setNewConsumable] = useState({ description: '', qty: 1, unitPrice: '', partId: '' });
@@ -281,7 +282,8 @@ function App() {
         scheduledEndDate = new Date(endMs);
       }
       // The assignTechOnJobCreate function assigns the technician after the job is created
-      await addDoc(collection(db, 'jobs'), {
+      const batch = writeBatch(db);
+      batch.set(doc(collection(db, 'jobs')), {
         client: resolvedClientName,
         clientEmail: resolvedClientEmail,
         clientPhone: requestForm.phone,
@@ -302,6 +304,10 @@ function App() {
         createdAt: new Date(),
         updatedBy: firebaseUser?.email,
       });
+      if (requestForm.smsConsent) {
+        batch.set(doc(collection(db, 'smsConsents')), smsConsentRecord(requestForm.phone, firebaseUser?.email));
+      }
+      await batch.commit();
       setRequestSuccess('Request submitted.');
       setRequestForm({
         name: profile?.role === 'client' ? (profile.displayName || '') : '',
@@ -313,6 +319,7 @@ function App() {
         serialNumber: '',
         scheduledFor: '',
         scheduledEndTime: '',
+        smsConsent: false,
       });
     } catch (error) {
       console.error('Submit request failed', error);
