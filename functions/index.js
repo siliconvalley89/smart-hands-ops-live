@@ -763,45 +763,29 @@ exports.sendPaymentReminders = onSchedule(
   },
 );
 
-// Emails the job's saved invoice PDF to the client; retries link-only if EmailJS rejects the attachment
+// Emails a link to the job's invoice; the PDF is not attached because EmailJS rejects attachments over 500 KB
 async function sendInvoiceEmail(jobId, job) {
   const serviceId = emailjsServiceId.value().trim();
   const templateId = emailjsInvoiceTemplateId.value().trim();
   const publicKey = emailjsPublicKey.value().trim();
   const privateKey = emailjsPrivateKey.value().trim();
 
-  const [[pdfBytes], { balance }] = await Promise.all([
-    getStorage().bucket().file(job.invoicePdfPath).download(),
-    getInvoiceBalance(jobId),
-  ]);
-  const templateParams = {
-    to_email:         job.clientEmail,
-    to_name:          job.client || 'Valued Customer',
-    job_id:           jobId,
-    amount_due:       `$${balance.toFixed(2)}`,
-    invoice_link:     'https://smart-hands-live.web.app',
-    invoice_filename: `SV-Smart-Dispatch-Invoice-${jobId}.pdf`,
-  };
-
+  const { balance } = await getInvoiceBalance(jobId);
   const billingRef = getFirestore().collection('jobBilling').doc(jobId);
-  let sentWith = 'attachment';
   try {
     await sendEmailJs(serviceId, templateId, publicKey, privateKey, {
-      ...templateParams,
-      invoice_pdf: pdfBytes.toString('base64'),
+      to_email:     job.clientEmail,
+      to_name:      job.client || 'Valued Customer',
+      job_id:       jobId,
+      amount_due:   `$${balance.toFixed(2)}`,
+      invoice_link: 'https://smart-hands-live.web.app',
     });
   } catch (err) {
-    console.error(`Invoice email with attachment failed for job ${jobId}, sending link only:`, err.message);
-    sentWith = 'link';
-    try {
-      await sendEmailJs(serviceId, templateId, publicKey, privateKey, templateParams);
-    } catch (linkErr) {
-      console.error(`Invoice email failed for job ${jobId}:`, linkErr.message);
-      await billingRef.set({ invoiceEmailError: linkErr.message, invoiceEmailAttemptedAt: new Date() }, { merge: true });
-      throw linkErr;
-    }
+    console.error(`Invoice email failed for job ${jobId}:`, err.message);
+    await billingRef.set({ invoiceEmailError: err.message, invoiceEmailAttemptedAt: new Date() }, { merge: true });
+    throw err;
   }
-  await billingRef.set({ invoiceEmailSentAt: new Date(), invoiceEmailSentWith: sentWith }, { merge: true });
+  await billingRef.set({ invoiceEmailSentAt: new Date(), invoiceEmailSentWith: 'link' }, { merge: true });
 }
 
 exports.sendInvoiceEmailOnSignOff = onDocumentUpdated(
