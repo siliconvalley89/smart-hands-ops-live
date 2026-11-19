@@ -1428,13 +1428,13 @@ exports.createJobFromWebsite = onRequest({ cors: ['https://www.siliconvalleysmar
     return res.status(400).json({ error: validationError });
   }
 
-  const { fullName, companyName, serviceType, email, urgencyLevel, preferredStartDate, scopeOfWork } = body;
+  const { fullName, companyName, serviceType, email, phone, urgencyLevel, preferredStartDate, scopeOfWork } = body;
 
   const jobData = {
     client:            fullName,
     clientCompany:     companyName || '',
     clientEmail:       email,
-    clientPhone:       '',
+    clientPhone:       phone.trim(),
     location:          '',
     rawLocation:       '',
     lat:               null,
