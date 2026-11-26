@@ -23,7 +23,10 @@ async function fetchGooglePlace(apiKey, placeId) {
   const response = await fetch(`https://places.googleapis.com/v1/places/${encodeURIComponent(placeId)}`, {
     headers: { 'X-Goog-Api-Key': apiKey, 'X-Goog-FieldMask': GOOGLE_FIELD_MASK },
   });
-  if (!response.ok) throw new Error(`Google Places responded ${response.status}`);
+  if (!response.ok) {
+    const detail = await response.json().then((body) => body?.error?.message).catch(() => '');
+    throw new Error(`Google Places responded ${response.status}${detail ? `: ${detail}` : ''}`);
+  }
   return response.json();
 }
 
