@@ -89,6 +89,10 @@ const emailjsInvoiceTemplateId = defineSecret('EMAILJS_INVOICE_TEMPLATE_ID');
 const stripeSecretKey = defineSecret('STRIPE_SECRET_KEY');
 const stripeWebhookSecret = defineSecret('STRIPE_WEBHOOK_SECRET');
 const turnstileSecretKey = defineSecret('TURNSTILE_SECRET_KEY');
+const googlePlacesApiKey = defineSecret('GOOGLE_PLACES_API_KEY');
+const googlePlaceId = defineSecret('GOOGLE_PLACE_ID');
+const GOOGLE_CACHE_MS = 6 * 60 * 60 * 1000;
+let googleReviewsCache = { at: 0, data: null };
 
 /**
  * Looks up the assigned tech's FCM token and sends a push notification
@@ -1409,6 +1413,7 @@ exports.pruneWebsiteIntakeLimits = onSchedule(
 );
 
 const { validateReview, toPublicReview } = require('./reviews');
+const { googleReviewsFromPlace, fetchGooglePlace } = require('./googleReviews');
 const WEBSITE_ORIGINS = ['https://www.siliconvalleysmarthands.com', 'https://sv-smart-hands-website-dbc85.web.app'];
 
 exports.submitWebsiteReview = onRequest({ cors: WEBSITE_ORIGINS, secrets: [turnstileSecretKey] }, async (req, res) => {
@@ -1431,17 +1436,33 @@ exports.submitWebsiteReview = onRequest({ cors: WEBSITE_ORIGINS, secrets: [turns
   return res.status(200).json({ ok: true });
 });
 
-exports.listApprovedReviews = onRequest({ cors: WEBSITE_ORIGINS }, async (req, res) => {
+async function loadGoogleReviews() {
+  const placeId = googlePlaceId.value().trim();
+  if (!placeId) return { reviews: [], summary: null };
+  if (googleReviewsCache.data && Date.now() - googleReviewsCache.at < GOOGLE_CACHE_MS) return googleReviewsCache.data;
+  try {
+    const place = await fetchGooglePlace(googlePlacesApiKey.value().trim(), placeId);
+    const data = googleReviewsFromPlace(place);
+    googleReviewsCache = { at: Date.now(), data };
+    return data;
+  } catch (err) {
+    console.error('Google reviews unavailable:', err.message);
+    return { reviews: [], summary: null };
+  }
+}
+
+exports.listApprovedReviews = onRequest({ cors: WEBSITE_ORIGINS, secrets: [googlePlacesApiKey, googlePlaceId] }, async (req, res) => {
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
   const snap = await getFirestore().collection('reviews').where('status', '==', 'approved').limit(50).get();
-  const reviews = snap.docs
+  const website = snap.docs
     .map((doc) => toPublicReview(doc.id, doc.data()))
     .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
     .slice(0, 12);
+  const google = await loadGoogleReviews();
   res.set('Cache-Control', 'public, max-age=300');
-  return res.status(200).json({ reviews });
+  return res.status(200).json({ reviews: [...website, ...google.reviews], google: google.summary });
 });
 
 exports.createJobFromWebsite = onRequest({ cors: ['https://www.siliconvalleysmarthands.com'], secrets: [turnstileSecretKey] }, async (req, res) => {
