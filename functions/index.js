@@ -1408,6 +1408,42 @@ exports.pruneWebsiteIntakeLimits = onSchedule(
   },
 );
 
+const { validateReview, toPublicReview } = require('./reviews');
+const WEBSITE_ORIGINS = ['https://www.siliconvalleysmarthands.com', 'https://sv-smart-hands-website-dbc85.web.app'];
+
+exports.submitWebsiteReview = onRequest({ cors: WEBSITE_ORIGINS, secrets: [turnstileSecretKey] }, async (req, res) => {
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method not allowed' });
+  }
+  const db = getFirestore();
+  if (!(await websiteIntakeAllowed(db, req))) {
+    return res.status(429).json({ error: 'Too many requests. Please try again later.' });
+  }
+  const body = req.body || {};
+  if (!(await turnstileVerified(body.turnstileToken, req))) {
+    return res.status(403).json({ error: 'Verification failed. Please try again.' });
+  }
+  const { review, error } = validateReview(body);
+  if (error) {
+    return res.status(400).json({ error });
+  }
+  await db.collection('reviews').add({ ...review, status: 'pending', createdAt: FieldValue.serverTimestamp() });
+  return res.status(200).json({ ok: true });
+});
+
+exports.listApprovedReviews = onRequest({ cors: WEBSITE_ORIGINS }, async (req, res) => {
+  if (req.method !== 'GET') {
+    return res.status(405).json({ error: 'Method not allowed' });
+  }
+  const snap = await getFirestore().collection('reviews').where('status', '==', 'approved').limit(50).get();
+  const reviews = snap.docs
+    .map((doc) => toPublicReview(doc.id, doc.data()))
+    .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
+    .slice(0, 12);
+  res.set('Cache-Control', 'public, max-age=300');
+  return res.status(200).json({ reviews });
+});
+
 exports.createJobFromWebsite = onRequest({ cors: ['https://www.siliconvalleysmarthands.com'], secrets: [turnstileSecretKey] }, async (req, res) => {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });

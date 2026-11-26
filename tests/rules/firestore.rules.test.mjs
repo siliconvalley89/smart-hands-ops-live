@@ -83,6 +83,7 @@ const SEED = [
   ['jobBilling/job-open', { total: 500 }],
   ['invoiceBilling/invoice_details', { companyName: 'Silicon Valley Smart Hands LLC' }],
   ['systemMetadata/billingMigration', { done: true }],
+  ['reviews/r-pending', { name: 'Jane Doe', company: 'Acme', rating: 5, text: 'Great work on the rack deployment.', status: 'pending', createdAt: new Date() }],
   ['badges/tech-uid', { role: 'tech' }],
   ['auditLog/seed-1', { entityType: 'job', jobId: 'job-open', action: 'created', actorEmail: ADMIN, createdAt: new Date() }],
 ];
@@ -1024,5 +1025,37 @@ describe('sms consent records from the request form', () => {
     await assertSucceeds(getDocs(collection(as.admin(), 'smsConsents')));
     await assertFails(getDocs(collection(as.client(), 'smsConsents')));
     await assertFails(addDoc(collection(as.anon(), 'smsConsents'), newConsent({ recordedBy: 'nobody@test.dev' })));
+  });
+});
+
+describe('website reviews moderation', () => {
+  const pendingRef = () => doc(as.admin(), 'reviews/r-pending');
+
+  it('admin reads pending reviews; others cannot', async () => {
+    await assertSucceeds(getDoc(pendingRef()));
+    await assertFails(getDoc(doc(as.client(), 'reviews/r-pending')));
+    await assertFails(getDoc(doc(as.tech(), 'reviews/r-pending')));
+    await assertFails(getDoc(doc(as.anon(), 'reviews/r-pending')));
+  });
+
+  it('nobody creates reviews directly; the website function does', async () => {
+    await assertFails(setDoc(doc(as.client(), 'reviews/r-new'), { name: 'X', rating: 5, text: 'x', status: 'approved' }));
+    await assertFails(setDoc(doc(as.admin(), 'reviews/r-new'), { name: 'X', rating: 5, text: 'x', status: 'approved' }));
+  });
+
+  it('admin approves or rejects, recording who and when', async () => {
+    await assertSucceeds(updateDoc(pendingRef(), { status: 'approved', moderatedAt: serverTimestamp(), moderatedBy: ADMIN }));
+    await assertSucceeds(updateDoc(doc(as.admin(), 'reviews/r-pending'), { status: 'rejected', moderatedAt: serverTimestamp(), moderatedBy: ADMIN }));
+  });
+
+  it('admin cannot change the review text or attribute a moderation to someone else', async () => {
+    await assertFails(updateDoc(pendingRef(), { status: 'approved', text: 'Edited by staff', moderatedAt: serverTimestamp(), moderatedBy: ADMIN }));
+    await assertFails(updateDoc(pendingRef(), { status: 'approved', moderatedAt: serverTimestamp(), moderatedBy: ASSISTANT }));
+    await assertFails(updateDoc(pendingRef(), { status: 'published', moderatedAt: serverTimestamp(), moderatedBy: ADMIN }));
+  });
+
+  it('assistants and clients cannot moderate', async () => {
+    await assertFails(updateDoc(doc(as.assistant(), 'reviews/r-pending'), { status: 'approved', moderatedAt: serverTimestamp(), moderatedBy: ASSISTANT }));
+    await assertFails(updateDoc(doc(as.client(), 'reviews/r-pending'), { status: 'approved', moderatedAt: serverTimestamp(), moderatedBy: CLIENT }));
   });
 });

@@ -34,6 +34,7 @@ import ActiveJobs from './features/ActiveJobs';
 import SchedulingBoard from './features/SchedulingBoard';
 import AssetHistory from './features/AssetHistory';
 import QuotesPanel from './features/QuotesPanel';
+import ReviewsPanel from './features/ReviewsPanel';
 import ClientQuotes from './features/ClientQuotes';
 import PaymentReturnBanner from './features/PaymentReturnBanner';
 import CompletedJobs from './features/CompletedJobs';
@@ -1002,7 +1003,7 @@ function App() {
     { key: 'map', label: 'Map' },
     { key: 'jobs', label: 'Jobs' },
     { key: 'quotes', label: 'Quotes' },
-    ...(isAdmin ? [{ key: 'contracts', label: 'Contracts' }, { key: 'money', label: 'Money' }] : []),
+    ...(isAdmin ? [{ key: 'contracts', label: 'Contracts' }, { key: 'money', label: 'Money' }, { key: 'reviews', label: 'Reviews' }] : []),
     { key: 'team', label: 'Team & tools' },
   ];
   const showStaffTab = (tab) => !canStaffManage || staffTab === tab;
@@ -1449,6 +1450,7 @@ function App() {
         {isAdmin && showStaffTab('money') && <Suspense fallback={LazyFallback}><ReportsPanel /></Suspense>}
         {isAdmin && showStaffTab('team') && <Suspense fallback={LazyFallback}><PartsInventory parts={parts} /></Suspense>}
         {canStaffManage && showStaffTab('quotes') && <QuotesPanel email={firebaseUser?.email || ''} isAdmin={isAdmin} />}
+        {isAdmin && showStaffTab('reviews') && <ReviewsPanel email={firebaseUser?.email || ''} />}
 
         {canStaffManage && showStaffTab('jobs') && (
           <RescheduleRequests activeJobs={activeJobs} jobs={jobs} askConfirm={askConfirm} setAppError={setAppError} />
